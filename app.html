@@ -1200,6 +1200,8 @@ tr:hover td{background:var(--card2);}
         <div class="nav-item" onclick="navTo('rooms')" data-page="rooms"><span class="icon">🏨</span>Room Management</div>
         <div class="nav-sect">Staff Tools</div>
         <div class="nav-item" onclick="navTo('wastage')" data-page="wastage"><span class="icon">🗑️</span>Wastage Log</div>
+        <div class="nav-item" onclick="navTo('expenses')" data-page="expenses"><span class="icon">💸</span>Expenses</div>
+        <div class="nav-item admin-only" onclick="navTo('suppliers')" data-page="suppliers"><span class="icon">🚚</span>Suppliers</div>
       </nav>
       <div class="sb-user">
         <div class="uavatar" id="sidebarAvatar">A</div>
@@ -1231,6 +1233,8 @@ tr:hover td{background:var(--card2);}
       <div id="page-wastage" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
       <div id="page-rooms"   style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
       <div id="page-reports" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
+      <div id="page-expenses" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
+      <div id="page-suppliers" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
     </div>
   </div>
 </div>
@@ -1433,9 +1437,9 @@ function defaultState() {
     },
     // ── ROLE-BASED PAGE ACCESS ──────────────────────────────────
     role_pages: {
-      admin:       ['dashboard','pos','members','inventory','transactions','reports','fortress','telegram','roster','kds','payroll','peer_review','white_wall','settlement','settings','wastage','rooms'],
-      manager:     ['dashboard','pos','members','inventory','transactions','reports','fortress','telegram','roster','kds','payroll','peer_review','wastage','rooms'],
-      accountant:  ['dashboard','transactions','reports','payroll','settlement'],
+      admin:       ['dashboard','pos','members','inventory','transactions','reports','fortress','telegram','roster','kds','payroll','peer_review','white_wall','settlement','settings','wastage','rooms','expenses','suppliers'],
+      manager:     ['dashboard','pos','members','inventory','transactions','reports','fortress','telegram','roster','kds','payroll','peer_review','wastage','rooms','expenses','suppliers'],
+      accountant:  ['dashboard','transactions','reports','payroll','settlement','expenses'],
       cashier:     ['dashboard','pos','members'],
       waiter:      ['dashboard','pos','kds','members'],
       chef:        ['dashboard','kds'],
@@ -1466,7 +1470,21 @@ function defaultState() {
     paper_size: '80mm',
     // ── END OF DAY REPORTS ──────────────────────────────────────
     eod_reports: [],
-    next_eod_id: 1
+    next_eod_id: 1,
+    // ── EXPENSE TRACKING ────────────────────────────────────────
+    expenses: [],
+    next_expense_id: 1,
+    expense_categories: ['Food & Beverage','Utilities','Salaries','Rent','Marketing','Maintenance','Supplies','Transport','Miscellaneous'],
+    // ── SUPPLIERS & PURCHASE ORDERS ─────────────────────────────
+    suppliers: [],
+    next_supplier_id: 1,
+    purchase_orders: [],
+    next_po_id: 1,
+    // ── TABLE CONFIGURATION ──────────────────────────────────────
+    table_sections: ['Main Hall','Outdoor','VIP','Bar'],
+    next_table_id: 1,
+    // tables array re-uses S.tables_config to avoid conflict with POS tables
+    tables_config: []
   };
 }
 
@@ -2055,6 +2073,8 @@ function renderPage(page, el) {
     case 'wastage':     renderWastage(el);    break;
     case 'rooms':       renderRooms(el);      break;
     case 'reports':     renderReports(el);    break;
+    case 'expenses':    renderExpenses(el);   break;
+    case 'suppliers':   renderSuppliers(el);  break;
   }
 }
 
@@ -3331,11 +3351,12 @@ function renderSettings(el) {
     settingsTab==='lock'      ? renderLockSettings()      :
     settingsTab==='iam'       ? renderIAMSettings()       :
     settingsTab==='industry'  ? renderIndustryManifest()  :
+    settingsTab==='tables'    ? renderTableSettings()      :
     renderBrandingSettings();
 
-  const tabs = ['branding','staff','pricing','loyalty','system','tax','lock','iam','industry'];
+  const tabs = ['branding','staff','pricing','loyalty','system','tax','lock','iam','industry','tables'];
   const labels = {branding:'Branding',staff:'Staff',pricing:'Pricing',loyalty:'Loyalty',
-    system:'System',tax:'Tax Rules',lock:'Auto-Lock',iam:'IAM / RBAC',industry:'Industry MCP'};
+    system:'System',tax:'Tax Rules',lock:'Auto-Lock',iam:'IAM / RBAC',industry:'Industry MCP',tables:'Tables'};
 
   el.innerHTML = `
   <div class="page-hdr">
@@ -4743,7 +4764,9 @@ function applyDiscount() {
 
 function openTableMap() {
   const occupied = new Set((S.kds_orders||[]).filter(o=>o.state!=='COLLECTED').map(o=>o.table));
-  const tables = S.tables || Array.from({length:10},(_,i)=>({id:i+1,label:'Table '+(i+1),seats:4,active:true}));
+  const tables = (S.tables_config&&S.tables_config.length>0)
+    ? S.tables_config
+    : (S.tables||Array.from({length:10},(_,i)=>({id:i+1,label:'Table '+(i+1),seats:4,active:true})));
   openModal(`
     <button class="mcls" onclick="closeModal()">✕</button>
     <div class="modal-title">Table Map</div>
@@ -6064,26 +6087,161 @@ function viewBookingDetail(bookingId) {
 // ═══════════════════════════════════════════════════════════════
 let reportsRange = 'today';
 
+let reportsMainTab = 'sales';
 function renderReports(el) {
+  const isEOD = reportsMainTab === 'eod';
   el.innerHTML = `
   <div class="page-hdr">
     <div><div class="page-title">Reports & Analytics</div><div class="page-sub">Sales, revenue, and performance insights</div></div>
     <div style="display:flex;gap:8px;align-items:center;">
-      <button class="btn btn-outline btn-sm" onclick="exportReportCSV()">Export CSV</button>
-      <button class="btn btn-gold btn-sm" onclick="window.printReportPage&&window.printReportPage()">Print Report</button>
+      ${!isEOD?`<button class="btn btn-outline btn-sm" onclick="exportReportCSV()">Export CSV</button>`:''}
+      <button class="btn btn-gold btn-sm" onclick="openZReport()" style="background:transparent;border:1px solid var(--gold);color:var(--gold);">📋 Z-Report / Close Day</button>
     </div>
   </div>
   <div class="page-body fade-in">
     <div class="tab-nav" style="margin-bottom:18px;">
-      ${['today','week','month','custom'].map(r=>`<button class="tbtn ${reportsRange===r?'active':''}" onclick="reportsRange='${r}';renderReports(document.getElementById('page-reports'))">${r.charAt(0).toUpperCase()+r.slice(1)}</button>`).join('')}
+      <button class="tbtn ${reportsMainTab==='sales'?'active':''}" onclick="reportsMainTab='sales';renderReports(document.getElementById('page-reports'))">Sales Analytics</button>
+      <button class="tbtn ${reportsMainTab==='eod'?'active':''}" onclick="reportsMainTab='eod';renderReports(document.getElementById('page-reports'))">EOD History (${(S.eod_reports||[]).length})</button>
+      <button class="tbtn ${reportsMainTab==='profit'?'active':''}" onclick="reportsMainTab='profit';renderReports(document.getElementById('page-reports'))">P&amp;L Summary</button>
     </div>
-    ${reportsRange==='custom'?`<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:12px;">
-      <label class="flabel" style="white-space:nowrap;">From:</label><input class="ifield" id="rpt_from" type="date" value="${todayStr()}" style="width:160px;">
-      <label class="flabel" style="white-space:nowrap;">To:</label><input class="ifield" id="rpt_to" type="date" value="${todayStr()}" style="width:160px;">
-      <button class="btn btn-gold btn-sm" onclick="renderReports(document.getElementById('page-reports'))">Apply</button>
-    </div>`:''}
-    ${buildReportBody()}
+    ${isEOD ? buildEODHistoryBody() : reportsMainTab==='profit' ? buildPLBody() : buildSalesTab()}
   </div>`;
+}
+
+function buildSalesTab() {
+  return `<div class="tab-nav" style="margin-bottom:14px;">
+    ${['today','week','month','custom'].map(r=>`<button class="tbtn ${reportsRange===r?'active':''}" onclick="reportsRange='${r}';renderReports(document.getElementById('page-reports'))">${r.charAt(0).toUpperCase()+r.slice(1)}</button>`).join('')}
+  </div>
+  ${reportsRange==='custom'?`<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:12px;">
+    <label class="flabel" style="white-space:nowrap;">From:</label><input class="ifield" id="rpt_from" type="date" value="${todayStr()}" style="width:160px;">
+    <label class="flabel" style="white-space:nowrap;">To:</label><input class="ifield" id="rpt_to" type="date" value="${todayStr()}" style="width:160px;">
+    <button class="btn btn-gold btn-sm" onclick="renderReports(document.getElementById('page-reports'))">Apply</button>
+  </div>`:''}
+  ${buildReportBody()}`;
+}
+
+function buildEODHistoryBody() {
+  const eods = (S.eod_reports||[]).slice().sort((a,b)=>b.date.localeCompare(a.date));
+  if (!eods.length) return `<div class="card" style="text-align:center;padding:48px;color:var(--mut);">No Z-Reports closed yet.<br><span style="font-size:12px;">Use "Z-Report / Close Day" button after end of each trading day.</span></div>`;
+  return `
+    <div class="card">
+      <div class="card-hdr"><span class="card-title">End-of-Day Reports Archive</span><span class="text-xs text-mut">${eods.length} day${eods.length!==1?'s':''} on record</span></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Date</th><th>Closed By</th><th>Time</th><th>Transactions</th><th>Gross</th><th>Cash</th><th>Card</th><th>Mobile</th><th>VAT</th><th>Discounts</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${eods.map(r=>{
+            const nonCash = r.gross - (r.pay_map?.Cash||0);
+            const mobile = Object.entries(r.pay_map||{}).filter(([k])=>!['Cash','Card'].includes(k)&&!k.startsWith('Card')).reduce((a,[,v])=>a+v,0);
+            const card = Object.entries(r.pay_map||{}).filter(([k])=>k==='Card'||k.startsWith('Card [')).reduce((a,[,v])=>a+v,0);
+            return `<tr>
+              <td style="font-weight:600;color:var(--gold);">${fmtDate(r.date)}</td>
+              <td>${r.closed_by||'—'}</td>
+              <td style="font-size:11px;color:var(--mut);">${r.closed_at?fmtDateTime(r.closed_at).split(' ')[1]||'—':'—'}</td>
+              <td>${r.tx_count||0}</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--gold);">${fmt(r.gross||0)}</td>
+              <td style="font-family:'IBM Plex Mono',monospace;">${fmt(r.pay_map?.Cash||0)}</td>
+              <td style="font-family:'IBM Plex Mono',monospace;">${fmt(card)}</td>
+              <td style="font-family:'IBM Plex Mono',monospace;">${fmt(mobile)}</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--mut);">${fmt(r.vat||0)}</td>
+              <td style="font-family:'IBM Plex Mono',monospace;color:var(--org);">${fmt(r.discounts||0)}</td>
+              <td><button class="btn btn-outline btn-xs" onclick="viewEODDetail('${r.date}')">View</button></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px;">
+      <div class="stat-card gold"><div class="stat-val">${fmt(eods.reduce((a,r)=>a+(r.gross||0),0))}</div><div class="stat-lbl">Total Gross (all time)</div></div>
+      <div class="stat-card grn"><div class="stat-val">${eods.reduce((a,r)=>a+(r.tx_count||0),0)}</div><div class="stat-lbl">Total Transactions</div></div>
+      <div class="stat-card blu"><div class="stat-val">${fmt(eods.length>0?eods.reduce((a,r)=>a+(r.gross||0),0)/eods.length:0)}</div><div class="stat-lbl">Avg Daily Revenue</div></div>
+      <div class="stat-card org"><div class="stat-val">${fmt(eods.reduce((a,r)=>a+(r.vat||0),0))}</div><div class="stat-lbl">Total VAT Collected</div></div>
+    </div>`;
+}
+
+function viewEODDetail(date) {
+  const r = (S.eod_reports||[]).find(x=>x.date===date);
+  if (!r) return;
+  const payRows = Object.entries(r.pay_map||{}).map(([k,v])=>`<tr><td>${k}</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--gold);">${fmt(v)}</td><td>${Math.round(v/(r.gross||1)*100)}%</td></tr>`).join('');
+  const staffRows = Object.entries(r.staff_map||{}).map(([k,v])=>`<tr><td>${k}</td><td style="font-family:'IBM Plex Mono',monospace;color:var(--gold);">${fmt(v)}</td></tr>`).join('');
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">EOD Report — ${fmtDate(date)}</div>
+    <div style="max-height:65vh;overflow-y:auto;padding-right:4px;">
+      <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
+        <div class="stat-card gold"><div class="stat-val" style="font-size:20px;">${fmt(r.gross||0)}</div><div class="stat-lbl">Gross</div></div>
+        <div class="stat-card grn"><div class="stat-val" style="font-size:20px;">${r.tx_count||0}</div><div class="stat-lbl">Transactions</div></div>
+        <div class="stat-card blu"><div class="stat-val" style="font-size:20px;">${fmt(r.net||0)}</div><div class="stat-lbl">Net Sales</div></div>
+        <div class="stat-card org"><div class="stat-val" style="font-size:20px;">${fmt(r.vat||0)}</div><div class="stat-lbl">VAT</div></div>
+        <div class="stat-card gold"><div class="stat-val" style="font-size:20px;">${fmt(r.discounts||0)}</div><div class="stat-lbl">Discounts</div></div>
+        <div class="stat-card grn"><div class="stat-val" style="font-size:20px;">${r.void_count||0}</div><div class="stat-lbl">Voids</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div class="card"><div class="card-hdr"><span class="card-title">Payment Breakdown</span></div>
+          <table style="width:100%;font-size:12px;"><thead><tr><th>Method</th><th>Amount</th><th>%</th></tr></thead><tbody>${payRows}</tbody></table>
+        </div>
+        <div class="card"><div class="card-hdr"><span class="card-title">Staff Performance</span></div>
+          <table style="width:100%;font-size:12px;"><thead><tr><th>Staff</th><th>Revenue</th></tr></thead><tbody>${staffRows}</tbody></table>
+        </div>
+      </div>
+      ${r.notes?`<div class="card" style="margin-top:10px;"><div class="card-title mb-4">Notes</div><div style="font-size:12px;color:var(--mut);">${r.notes}</div></div>`:''}
+      <div style="font-size:11px;color:var(--mut);margin-top:10px;">Closed by ${r.closed_by||'—'} at ${r.closed_at?fmtDateTime(r.closed_at):'—'} · Z-Report #${r.z_number||'—'}</div>
+    </div>
+    <div style="margin-top:14px;display:flex;gap:8px;">
+      <button class="btn btn-outline" onclick="printEODReport('${date}')">Print</button>
+      <button class="btn btn-outline" onclick="closeModal()">Close</button>
+    </div>`);
+}
+
+function printEODReport(date) {
+  const r = (S.eod_reports||[]).find(x=>x.date===date);
+  if (!r) return;
+  const payRows = Object.entries(r.pay_map||{}).map(([k,v])=>`${k}: ${fmt(v)}`).join('\n');
+  const html = buildZReportHTML(r);
+  if (window.RB) window.RB.print.receipt(html);
+  else { const w=window.open('','_blank'); w.document.write(html); w.print(); }
+}
+
+function buildPLBody() {
+  const today = todayStr();
+  const monthStart = today.slice(0,7)+'-01';
+  const txs = S.transactions.filter(t=>t.ts.slice(0,10)>=monthStart&&!t.voided);
+  const gross = txs.reduce((a,t)=>a+t.total,0);
+  const vat = txs.reduce((a,t)=>a+(t.vat||0),0);
+  const net = gross - vat;
+  const cogs = txs.reduce((a,t)=>{
+    return a+(t.items||[]).reduce((b,i)=>{
+      const item=S.items.find(x=>x.id===i.item_id); return b+(item?(item.cost||0)*i.qty:0);},0);},0);
+  const grossProfit = net - cogs;
+  const expenses_month = (S.expenses||[]).filter(e=>e.date>=monthStart&&e.date<=today);
+  const totalExpenses = expenses_month.reduce((a,e)=>a+e.amount,0);
+  const netProfit = grossProfit - totalExpenses;
+  const margin = gross>0 ? (netProfit/gross*100).toFixed(1) : 0;
+
+  const expByCat = {};
+  expenses_month.forEach(e=>{ expByCat[e.category]=(expByCat[e.category]||0)+e.amount; });
+
+  return `
+    <div class="alert a-info" style="font-size:11px;margin-bottom:14px;">P&L for current month: <strong>${today.slice(0,7)}</strong>. Add expenses in the <a onclick="navTo('expenses')" style="color:var(--gold);cursor:pointer;">Expenses</a> page to improve accuracy.</div>
+    <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
+      <div class="stat-card gold"><div class="stat-val">${fmt(gross)}</div><div class="stat-lbl">Gross Revenue</div></div>
+      <div class="stat-card grn"><div class="stat-val">${fmt(net)}</div><div class="stat-lbl">Net Revenue (ex-VAT)</div></div>
+      <div class="stat-card blu"><div class="stat-val">${fmt(cogs)}</div><div class="stat-lbl">Cost of Goods (COGS)</div></div>
+      <div class="stat-card org"><div class="stat-val">${fmt(grossProfit)}</div><div class="stat-lbl">Gross Profit</div></div>
+      <div class="stat-card ${totalExpenses>0?'red':'grn'}"><div class="stat-val">${fmt(totalExpenses)}</div><div class="stat-lbl">Operating Expenses</div></div>
+      <div class="stat-card ${netProfit>=0?'grn':'red'}"><div class="stat-val" style="color:${netProfit>=0?'var(--grn)':'var(--red)'};">${fmt(netProfit)}</div><div class="stat-lbl">Net Profit (${margin}% margin)</div></div>
+    </div>
+    ${Object.keys(expByCat).length>0?`
+    <div class="card" style="max-width:480px;">
+      <div class="card-hdr"><span class="card-title">Expense Breakdown</span></div>
+      ${Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05);">
+          <span style="font-size:13px;">${cat}</span>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="height:6px;border-radius:3px;background:var(--red);opacity:.6;width:${Math.round(amt/totalExpenses*80)}px;"></div>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--red);">${fmt(amt)}</span>
+          </div>
+        </div>`).join('')}
+    </div>`:'<div class="card" style="text-align:center;padding:30px;color:var(--mut);">No expenses logged this month. <a onclick="navTo(\'expenses\')" style="color:var(--gold);cursor:pointer;">Add expenses →</a></div>'}`;
 }
 
 function getReportTxs() {
@@ -6328,24 +6486,38 @@ function closeEOD() {
   const payMap = {};
   txs.forEach(t=>{ const m=t.payment_method||'Other'; payMap[m]=(payMap[m]||0)+t.total; });
   const actual_cash = parseFloat(document.getElementById('eod_actual_cash')?.value)||0;
+  const voids = S.transactions.filter(t=>t.ts.startsWith(today)&&t.voided);
+  const vat = txs.reduce((a,t)=>a+(t.vat||0),0);
+  const net = txs.reduce((a,t)=>a+(t.net||0),0);
+  const discounts = txs.reduce((a,t)=>a+(t.discount||0),0);
+  const staffMap = {};
+  txs.forEach(t=>{ const n=t.staff_name||'?'; staffMap[n]=(staffMap[n]||0)+t.total; });
+  S.next_eod_id = S.next_eod_id||1;
+  const z_num = S.next_eod_id;
   const eod = {
-    id: S.next_eod_id++,
+    id: 'eod'+z_num,
+    z_number: z_num,
     date: today,
-    closed_at: now(),
-    closed_by: S.current_user.name,
-    gross, tx_count: txs.length,
+    closed_at: new Date().toISOString(),
+    closed_by: S.current_user?.name||'',
+    gross, net, vat, discounts,
+    tx_count: txs.length,
+    void_count: voids.length,
+    pay_map: payMap,
     payment_breakdown: payMap,
+    staff_map: staffMap,
     expected_cash: payMap['Cash']||0,
     actual_cash,
     variance: actual_cash - (payMap['Cash']||0)
   };
+  S.next_eod_id++;
   S.eod_reports = S.eod_reports||[];
   S.eod_reports.unshift(eod);
   saveState();
   closeModal();
-  log('Day closed', `Z-Report #${eod.id} — ${fmt(gross)} — ${txs.length} txns`, 'ok');
-  showToast(`Day closed ✓ — Z-Report #${eod.id} saved`, 'ok');
-  kairosLog(`📋 [EOD] Z-Report #${eod.id} — ${fmt(gross)} — closed by ${S.current_user.name}`, 'ok');
+  log('Day closed', `Z-Report #${eod.z_number} — ${fmt(gross)} — ${txs.length} txns`, 'ok');
+  showToast(`Day closed ✓ — Z-Report #${eod.z_number} saved`, 'ok');
+  kairosLog(`📋 [EOD] Z-Report #${eod.z_number} — ${fmt(gross)} — closed by ${S.current_user?.name||''}`, 'ok');
   if (window.RB) window.RB.notify('Day Closed', `Z-Report: ${fmt(gross)} in ${txs.length} transactions`);
 }
 
@@ -6517,6 +6689,589 @@ function startWatchdog() {
   // Expose for settings
   window.barcodeLastScan = function() { return barcodeBuffer; };
 })();
+
+// ═══════════════════════════════════════════════════════════════
+//  EXPENSE TRACKING
+// ═══════════════════════════════════════════════════════════════
+function renderExpenses(el) {
+  const expenses = (S.expenses||[]).slice().sort((a,b)=>b.date.localeCompare(a.date));
+  const monthStart = todayStr().slice(0,7)+'-01';
+  const monthExp = expenses.filter(e=>e.date>=monthStart);
+  const monthTotal = monthExp.reduce((a,e)=>a+e.amount,0);
+  const byCat = {};
+  monthExp.forEach(e=>{ byCat[e.category]=(byCat[e.category]||0)+e.amount; });
+
+  el.innerHTML = `
+  <div class="page-hdr">
+    <div><div class="page-title">Expense Tracker</div><div class="page-sub">Log and categorise business expenses for P&L reporting</div></div>
+    <button class="btn btn-gold btn-sm" onclick="openAddExpense()">+ Log Expense</button>
+  </div>
+  <div class="page-body fade-in">
+    <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px;">
+      <div class="stat-card red"><div class="stat-val">${fmt(monthTotal)}</div><div class="stat-lbl">This Month</div></div>
+      <div class="stat-card org"><div class="stat-val">${monthExp.length}</div><div class="stat-lbl">Entries</div></div>
+      <div class="stat-card gold"><div class="stat-val">${monthTotal>0?fmt(monthTotal/monthExp.length):fmt(0)}</div><div class="stat-lbl">Avg per Entry</div></div>
+      <div class="stat-card blu"><div class="stat-val">${Object.keys(byCat).length}</div><div class="stat-lbl">Categories Used</div></div>
+    </div>
+    ${Object.keys(byCat).length>0?`<div class="card" style="margin-bottom:14px;">
+      <div class="card-hdr"><span class="card-title">This Month by Category</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;padding-top:6px;">
+        ${Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>`
+          <div style="background:rgba(204,26,26,.12);border:1px solid rgba(204,26,26,.3);border-radius:8px;padding:6px 12px;font-size:12px;">
+            <div style="color:var(--mut);font-size:10px;margin-bottom:2px;">${cat}</div>
+            <div style="font-family:'IBM Plex Mono',monospace;color:var(--red);font-weight:600;">${fmt(amt)}</div>
+          </div>`).join('')}
+      </div>
+    </div>`:''}
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">All Expenses (${expenses.length})</span>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-outline btn-xs" onclick="exportExpensesCSV()">Export CSV</button>
+        </div>
+      </div>
+      ${expenses.length===0?`<div style="text-align:center;padding:40px;color:var(--mut);">No expenses logged yet. Click "+ Log Expense" to start.</div>`:
+      `<div class="tbl-wrap"><table>
+        <thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Supplier</th><th>Amount</th><th>Logged By</th><th>Receipt</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${expenses.map(e=>`<tr>
+            <td style="color:var(--mut);font-size:12px;">${fmtDate(e.date)}</td>
+            <td><span style="background:rgba(204,26,26,.12);border-radius:4px;padding:2px 8px;font-size:11px;">${e.category}</span></td>
+            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${e.description}">${e.description}</td>
+            <td style="font-size:12px;color:var(--mut);">${e.supplier||'—'}</td>
+            <td style="font-family:'IBM Plex Mono',monospace;color:var(--red);font-weight:600;">${fmt(e.amount)}</td>
+            <td style="font-size:12px;color:var(--mut);">${e.logged_by||'—'}</td>
+            <td style="font-size:11px;">${e.receipt_ref?`<span style="color:var(--gold);">#${e.receipt_ref}</span>`:'—'}</td>
+            <td><button class="btn btn-danger btn-xs" onclick="deleteExpense('${e.id}')">Del</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>`}
+    </div>
+  </div>`;
+}
+
+function openAddExpense() {
+  const suppliers = (S.suppliers||[]).filter(s=>s.active!==false);
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Log Expense</div>
+    <div class="grid-2 mb-16">
+      <div><label class="flabel">Date</label><input class="ifield" id="exp_date" type="date" value="${todayStr()}"></div>
+      <div><label class="flabel">Amount (${S.currency||'KES'})</label><input class="ifield" id="exp_amount" type="number" min="0" step="0.01" placeholder="0.00"></div>
+      <div><label class="flabel">Category</label>
+        <select class="ifield" id="exp_cat">
+          ${(S.expense_categories||[]).map(c=>`<option value="${c}">${c}</option>`).join('')}
+        </select>
+      </div>
+      <div><label class="flabel">Supplier (optional)</label>
+        <select class="ifield" id="exp_supplier">
+          <option value="">— None —</option>
+          ${suppliers.map(s=>`<option value="${s.name}">${s.name}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="fg"><label class="flabel">Description</label><input class="ifield" id="exp_desc" placeholder="e.g. Weekly veg purchase from Nairobi Market"></div>
+    <div class="fg"><label class="flabel">Receipt / Invoice Reference</label><input class="ifield" id="exp_ref" placeholder="e.g. INV-0042"></div>
+    <button class="btn btn-gold w-full mt-8" onclick="saveExpense()">Log Expense</button>`);
+}
+
+function saveExpense() {
+  const amount = parseFloat(document.getElementById('exp_amount').value)||0;
+  const desc = document.getElementById('exp_desc').value.trim();
+  if (amount<=0 || !desc) { showToast('Amount and description required','warn'); return; }
+  S.expenses = S.expenses||[];
+  S.next_expense_id = S.next_expense_id||1;
+  S.expenses.unshift({
+    id: 'exp'+S.next_expense_id++,
+    date: document.getElementById('exp_date').value||todayStr(),
+    category: document.getElementById('exp_cat').value,
+    description: desc,
+    supplier: document.getElementById('exp_supplier').value.trim()||'',
+    amount,
+    receipt_ref: document.getElementById('exp_ref').value.trim()||'',
+    logged_by: S.current_user?.name||'',
+    ts: new Date().toISOString()
+  });
+  saveState();
+  closeModal();
+  showToast(`Expense logged: ${fmt(amount)} ✓`,'ok');
+  renderExpenses(document.getElementById('page-expenses'));
+}
+
+function deleteExpense(id) {
+  if (!confirm('Delete this expense entry?')) return;
+  S.expenses = (S.expenses||[]).filter(e=>e.id!==id);
+  saveState();
+  showToast('Expense deleted','ok');
+  renderExpenses(document.getElementById('page-expenses'));
+}
+
+function exportExpensesCSV() {
+  const rows = [['Date','Category','Description','Supplier','Amount','Logged By','Receipt Ref']];
+  (S.expenses||[]).forEach(e=>rows.push([e.date,e.category,e.description,e.supplier||'',e.amount,e.logged_by||'',e.receipt_ref||'']));
+  const csv = rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
+  if (window.RB) window.RB.export.csv(`ReccoBello_Expenses_${todayStr()}.csv`,csv);
+  else { const a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv); a.download=`Expenses_${todayStr()}.csv`; a.click(); }
+  showToast('Expenses exported ✓','ok');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SUPPLIER / PURCHASE ORDERS
+// ═══════════════════════════════════════════════════════════════
+let supplierTab = 'suppliers';
+function renderSuppliers(el) {
+  el.innerHTML = `
+  <div class="page-hdr">
+    <div><div class="page-title">Suppliers & Purchases</div><div class="page-sub">Manage supplier contacts and purchase orders</div></div>
+    <div style="display:flex;gap:8px;">
+      ${supplierTab==='suppliers'?`<button class="btn btn-gold btn-sm" onclick="openAddSupplier()">+ Add Supplier</button>`:`<button class="btn btn-gold btn-sm" onclick="openCreatePO()">+ New Order</button>`}
+    </div>
+  </div>
+  <div class="page-body fade-in">
+    <div class="tab-nav" style="margin-bottom:18px;">
+      <button class="tbtn ${supplierTab==='suppliers'?'active':''}" onclick="supplierTab='suppliers';renderSuppliers(document.getElementById('page-suppliers'))">Suppliers (${(S.suppliers||[]).length})</button>
+      <button class="tbtn ${supplierTab==='orders'?'active':''}" onclick="supplierTab='orders';renderSuppliers(document.getElementById('page-suppliers'))">Purchase Orders (${(S.purchase_orders||[]).length})</button>
+    </div>
+    ${supplierTab==='suppliers' ? renderSupplierList() : renderPOList()}
+  </div>`;
+}
+
+function renderSupplierList() {
+  const suppliers = S.suppliers||[];
+  if (!suppliers.length) return `<div class="card" style="text-align:center;padding:48px;color:var(--mut);">No suppliers added yet. Click "+ Add Supplier" to get started.</div>`;
+  return `<div class="card">
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Category</th><th>Payment Terms</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${suppliers.map(s=>`<tr>
+          <td><strong>${s.name}</strong></td>
+          <td style="font-size:12px;">${s.contact_name||'—'}</td>
+          <td style="font-size:12px;font-family:'IBM Plex Mono',monospace;">${s.phone||'—'}</td>
+          <td><span style="background:rgba(240,184,0,.12);border-radius:4px;padding:2px 8px;font-size:11px;">${s.category||'General'}</span></td>
+          <td style="font-size:12px;color:var(--mut);">${s.payment_terms||'Cash on delivery'}</td>
+          <td><span class="badge ${s.active!==false?'bg-grn':'bg-mut'}">${s.active!==false?'Active':'Inactive'}</span></td>
+          <td style="display:flex;gap:4px;">
+            <button class="btn btn-outline btn-xs" onclick="openEditSupplier('${s.id}')">Edit</button>
+            <button class="btn btn-gold btn-xs" onclick="openCreatePO('${s.id}')">PO</button>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table></div>
+  </div>`;
+}
+
+function renderPOList() {
+  const orders = (S.purchase_orders||[]).slice().sort((a,b)=>b.created_at.localeCompare(a.created_at));
+  if (!orders.length) return `<div class="card" style="text-align:center;padding:48px;color:var(--mut);">No purchase orders yet. Create one from the Suppliers tab.</div>`;
+  return `<div class="card">
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>PO #</th><th>Supplier</th><th>Date</th><th>Items</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${orders.map(po=>{
+          const sup = (S.suppliers||[]).find(s=>s.id===po.supplier_id);
+          const statusColor = po.status==='received'?'bg-grn':po.status==='partial'?'bg-org':po.status==='pending'?'bg-gold':'bg-mut';
+          return `<tr>
+            <td style="font-family:'IBM Plex Mono',monospace;color:var(--gold);">PO-${String(po.id).padStart(4,'0')}</td>
+            <td><strong>${sup?.name||po.supplier_name||'—'}</strong></td>
+            <td style="font-size:12px;color:var(--mut);">${fmtDate(po.created_at.slice(0,10))}</td>
+            <td>${(po.items||[]).length} item${(po.items||[]).length!==1?'s':''}</td>
+            <td style="font-family:'IBM Plex Mono',monospace;color:var(--gold);">${fmt(po.total||0)}</td>
+            <td><span class="badge ${statusColor}">${po.status||'pending'}</span></td>
+            <td style="display:flex;gap:4px;">
+              <button class="btn btn-outline btn-xs" onclick="viewPO('${po.id}')">View</button>
+              ${po.status!=='received'?`<button class="btn btn-grn btn-xs" onclick="markPOReceived('${po.id}')">Mark Received</button>`:''}
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table></div>
+  </div>`;
+}
+
+function openAddSupplier() {
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Add Supplier</div>
+    ${supplierForm(null)}`);
+}
+
+function openEditSupplier(id) {
+  const s = (S.suppliers||[]).find(x=>x.id===id);
+  if (!s) return;
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Edit Supplier: ${s.name}</div>
+    ${supplierForm(s)}`);
+}
+
+function supplierForm(s) {
+  return `<div class="grid-2 mb-14">
+    <div><label class="flabel">Company Name *</label><input class="ifield" id="sup_name" value="${s?.name||''}"></div>
+    <div><label class="flabel">Contact Person</label><input class="ifield" id="sup_contact" value="${s?.contact_name||''}"></div>
+    <div><label class="flabel">Phone</label><input class="ifield" id="sup_phone" value="${s?.phone||''}"></div>
+    <div><label class="flabel">Email</label><input class="ifield" id="sup_email" value="${s?.email||''}" type="email"></div>
+    <div><label class="flabel">Category</label>
+      <select class="ifield" id="sup_cat">
+        ${['Food & Beverage','Beverages','Cleaning Supplies','Stationery','Equipment','Services','Other'].map(c=>`<option value="${c}" ${s?.category===c?'selected':''}>${c}</option>`).join('')}
+      </select>
+    </div>
+    <div><label class="flabel">Payment Terms</label>
+      <select class="ifield" id="sup_terms">
+        ${['Cash on delivery','Net 7','Net 14','Net 30','Pre-payment'].map(t=>`<option value="${t}" ${s?.payment_terms===t?'selected':''}>${t}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  <div class="fg"><label class="flabel">Address</label><input class="ifield" id="sup_addr" value="${s?.address||''}"></div>
+  <div class="fg"><label class="flabel">Notes</label><input class="ifield" id="sup_notes" value="${s?.notes||''}"></div>
+  <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;margin-bottom:14px;">
+    <input type="checkbox" id="sup_active" ${s?.active!==false?'checked':''} style="width:16px;height:16px;">Active supplier
+  </label>
+  <button class="btn btn-gold w-full" onclick="saveSupplier('${s?.id||''}')">Save Supplier</button>`;
+}
+
+function saveSupplier(existing_id) {
+  const name = document.getElementById('sup_name').value.trim();
+  if (!name) { showToast('Company name required','warn'); return; }
+  S.suppliers = S.suppliers||[];
+  S.next_supplier_id = S.next_supplier_id||1;
+  if (existing_id) {
+    const s = S.suppliers.find(x=>x.id===existing_id);
+    if (s) {
+      s.name = name;
+      s.contact_name = document.getElementById('sup_contact').value.trim();
+      s.phone = document.getElementById('sup_phone').value.trim();
+      s.email = document.getElementById('sup_email').value.trim();
+      s.category = document.getElementById('sup_cat').value;
+      s.payment_terms = document.getElementById('sup_terms').value;
+      s.address = document.getElementById('sup_addr').value.trim();
+      s.notes = document.getElementById('sup_notes').value.trim();
+      s.active = document.getElementById('sup_active').checked;
+    }
+  } else {
+    S.suppliers.push({
+      id: 'sup'+S.next_supplier_id++,
+      name,
+      contact_name: document.getElementById('sup_contact').value.trim(),
+      phone: document.getElementById('sup_phone').value.trim(),
+      email: document.getElementById('sup_email').value.trim(),
+      category: document.getElementById('sup_cat').value,
+      payment_terms: document.getElementById('sup_terms').value,
+      address: document.getElementById('sup_addr').value.trim(),
+      notes: document.getElementById('sup_notes').value.trim(),
+      active: document.getElementById('sup_active').checked,
+      created_at: new Date().toISOString()
+    });
+  }
+  saveState();
+  closeModal();
+  showToast('Supplier saved ✓','ok');
+  renderSuppliers(document.getElementById('page-suppliers'));
+}
+
+function openCreatePO(supplier_id) {
+  const suppliers = (S.suppliers||[]).filter(s=>s.active!==false);
+  const selectedSup = supplier_id ? suppliers.find(s=>s.id===supplier_id) : null;
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">New Purchase Order</div>
+    <div class="grid-2 mb-14">
+      <div><label class="flabel">Supplier *</label>
+        <select class="ifield" id="po_sup">
+          <option value="">— Select Supplier —</option>
+          ${suppliers.map(s=>`<option value="${s.id}" ${s.id===supplier_id?'selected':''}>${s.name}</option>`).join('')}
+        </select>
+      </div>
+      <div><label class="flabel">Order Date</label><input class="ifield" id="po_date" type="date" value="${todayStr()}"></div>
+      <div><label class="flabel">Expected Delivery</label><input class="ifield" id="po_delivery" type="date" value="${todayStr()}"></div>
+      <div><label class="flabel">Notes</label><input class="ifield" id="po_notes" placeholder="Special instructions..."></div>
+    </div>
+    <div class="card-title mb-8">Order Items</div>
+    <div id="po_items_wrap"></div>
+    <button class="btn btn-outline btn-sm mt-8" onclick="addPOItem()">+ Add Item</button>
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--bdr);display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:13px;">Total: <strong id="po_total_display" style="color:var(--gold);">${fmt(0)}</strong></div>
+      <button class="btn btn-gold" onclick="savePO()">Create Purchase Order</button>
+    </div>`);
+  addPOItem();
+}
+
+function addPOItem() {
+  const wrap = document.getElementById('po_items_wrap');
+  if (!wrap) return;
+  const idx = wrap.children.length;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:grid;grid-template-columns:1fr auto auto auto;gap:8px;margin-bottom:8px;align-items:end;';
+  row.innerHTML = `
+    <div><label class="flabel">Item / Description</label><input class="ifield" class="po-item-desc" placeholder="e.g. Tomatoes 1kg" onchange="updatePOTotal()"></div>
+    <div><label class="flabel">Qty</label><input class="ifield" type="number" min="1" value="1" class="po-item-qty" style="width:80px;" oninput="updatePOTotal()"></div>
+    <div><label class="flabel">Unit Price</label><input class="ifield" type="number" min="0" step="0.01" value="0" class="po-item-price" style="width:100px;" oninput="updatePOTotal()"></div>
+    <button class="btn btn-danger btn-xs" style="margin-bottom:2px;" onclick="this.closest('div[style]').remove();updatePOTotal()">✕</button>`;
+  wrap.appendChild(row);
+}
+
+function updatePOTotal() {
+  const wrap = document.getElementById('po_items_wrap');
+  if (!wrap) return;
+  let total = 0;
+  wrap.querySelectorAll('div[style]').forEach(row=>{
+    const qty = parseFloat(row.querySelector('.po-item-qty')?.value)||0;
+    const price = parseFloat(row.querySelector('.po-item-price')?.value)||0;
+    total += qty*price;
+  });
+  const disp = document.getElementById('po_total_display');
+  if (disp) disp.textContent = fmt(total);
+}
+
+function savePO() {
+  const sup_id = document.getElementById('po_sup').value;
+  if (!sup_id) { showToast('Select a supplier','warn'); return; }
+  const wrap = document.getElementById('po_items_wrap');
+  const items = [];
+  let total = 0;
+  wrap.querySelectorAll('div[style]').forEach(row=>{
+    const desc = row.querySelector('.po-item-desc')?.value?.trim()||row.querySelector('input[placeholder]')?.value?.trim()||'';
+    const qty = parseFloat(row.querySelector('.po-item-qty')?.value)||0;
+    const price = parseFloat(row.querySelector('.po-item-price')?.value)||0;
+    if (desc && qty>0) { items.push({description:desc,qty,unit_price:price,total:qty*price}); total+=qty*price; }
+  });
+  if (!items.length) { showToast('Add at least one item','warn'); return; }
+  S.purchase_orders = S.purchase_orders||[];
+  S.next_po_id = S.next_po_id||1;
+  const sup = (S.suppliers||[]).find(s=>s.id===sup_id);
+  const po = {
+    id: S.next_po_id++,
+    supplier_id: sup_id,
+    supplier_name: sup?.name||'',
+    items,
+    total,
+    status: 'pending',
+    notes: document.getElementById('po_notes').value.trim(),
+    expected_delivery: document.getElementById('po_delivery').value,
+    created_at: new Date().toISOString(),
+    created_by: S.current_user?.name||''
+  };
+  S.purchase_orders.unshift(po);
+  saveState();
+  closeModal();
+  supplierTab='orders';
+  showToast(`PO-${String(po.id).padStart(4,'0')} created ✓`,'ok');
+  renderSuppliers(document.getElementById('page-suppliers'));
+}
+
+function viewPO(id) {
+  const po = (S.purchase_orders||[]).find(p=>String(p.id)===String(id));
+  if (!po) return;
+  const sup = (S.suppliers||[]).find(s=>s.id===po.supplier_id);
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">PO-${String(po.id).padStart(4,'0')} — ${sup?.name||po.supplier_name||'Unknown'}</div>
+    <div style="font-size:12px;color:var(--mut);margin-bottom:14px;">Created ${fmtDateTime(po.created_at)} by ${po.created_by||'—'} · Delivery: ${po.expected_delivery?fmtDate(po.expected_delivery):'—'}</div>
+    <div class="tbl-wrap" style="margin-bottom:14px;"><table>
+      <thead><tr><th>Item</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead>
+      <tbody>
+        ${(po.items||[]).map(i=>`<tr>
+          <td>${i.description}</td>
+          <td>${i.qty}</td>
+          <td style="font-family:'IBM Plex Mono',monospace;">${fmt(i.unit_price)}</td>
+          <td style="font-family:'IBM Plex Mono',monospace;color:var(--gold);">${fmt(i.total)}</td>
+        </tr>`).join('')}
+        <tr style="border-top:2px solid var(--bdr);">
+          <td colspan="3" style="text-align:right;font-weight:600;">Total:</td>
+          <td style="font-family:'IBM Plex Mono',monospace;color:var(--gold);font-weight:700;">${fmt(po.total)}</td>
+        </tr>
+      </tbody>
+    </table></div>
+    ${po.notes?`<div style="font-size:12px;color:var(--mut);margin-bottom:14px;">Notes: ${po.notes}</div>`:''}
+    <div style="display:flex;gap:8px;">
+      ${po.status!=='received'?`<button class="btn btn-grn btn-sm" onclick="markPOReceived('${po.id}');closeModal();">Mark as Received</button>`:''}
+      <button class="btn btn-outline btn-sm" onclick="closeModal()">Close</button>
+    </div>`);
+}
+
+function markPOReceived(id) {
+  const po = (S.purchase_orders||[]).find(p=>String(p.id)===String(id));
+  if (!po) return;
+  po.status = 'received';
+  po.received_at = new Date().toISOString();
+  po.received_by = S.current_user?.name||'';
+  saveState();
+  showToast(`PO-${String(po.id).padStart(4,'0')} marked as received ✓`,'ok');
+  renderSuppliers(document.getElementById('page-suppliers'));
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  TABLE CONFIGURATION (Settings tab)
+// ═══════════════════════════════════════════════════════════════
+function renderTableSettings() {
+  const tables = S.tables_config||[];
+  const sections = S.table_sections||['Main Hall','Outdoor','VIP','Bar'];
+  return `<div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div class="card-title">Table Configuration (${tables.length} tables)</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-outline btn-sm" onclick="openManageSections()">Manage Sections</button>
+        <button class="btn btn-gold btn-sm" onclick="openAddTable()">+ Add Table</button>
+      </div>
+    </div>
+    <div class="alert a-info" style="font-size:11px;margin-bottom:14px;">Tables defined here will appear in the POS table map. Changes take effect immediately.</div>
+    ${sections.map(sec=>{
+      const secTables = tables.filter(t=>t.section===sec);
+      if (!secTables.length) return `<div class="card" style="margin-bottom:10px;"><div class="card-hdr"><span class="card-title">${sec}</span><button class="btn btn-ghost btn-xs" onclick="deleteSection('${sec}')">Remove Section</button></div><div style="color:var(--mut);font-size:12px;padding:8px 0;">No tables in this section. <a onclick="openAddTable('${sec}')" style="color:var(--gold);cursor:pointer;">Add one →</a></div></div>`;
+      return `<div class="card" style="margin-bottom:10px;">
+        <div class="card-hdr"><span class="card-title">${sec} (${secTables.length})</span><button class="btn btn-ghost btn-xs" onclick="deleteSection('${sec}')">Remove Section</button></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-top:8px;">
+          ${secTables.map(t=>`<div style="background:var(--card2);border:1px solid var(--bdr);border-radius:8px;padding:10px;text-align:center;position:relative;">
+            <div style="font-weight:600;font-size:13px;">${t.label}</div>
+            <div style="font-size:10px;color:var(--mut);margin:2px 0;">${t.seats||2} seats</div>
+            <div style="display:flex;gap:4px;justify-content:center;margin-top:6px;">
+              <button class="btn btn-outline btn-xs" onclick="openEditTable('${t.id}')">Edit</button>
+              <button class="btn btn-danger btn-xs" onclick="deleteTableConfig('${t.id}')">✕</button>
+            </div>
+          </div>`).join('')}
+          <div onclick="openAddTable('${sec}')" style="background:transparent;border:2px dashed var(--bdr);border-radius:8px;padding:10px;text-align:center;cursor:pointer;color:var(--mut);font-size:12px;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.borderColor='var(--gold)';this.style.color='var(--gold)'" onmouseout="this.style.borderColor='var(--bdr)';this.style.color='var(--mut)'">+ Add</div>
+        </div>
+      </div>`;
+    }).join('')}
+    ${tables.length>0?`<button class="btn btn-gold mt-8" onclick="syncTablesFromConfig()">Apply & Sync Tables to POS</button>`:''}
+  </div>`;
+}
+
+function openAddTable(defaultSection) {
+  const sections = S.table_sections||['Main Hall'];
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Add Table</div>
+    <div class="grid-2 mb-14">
+      <div><label class="flabel">Table Label *</label><input class="ifield" id="tbl_label" placeholder="e.g. T1, Table 5, VIP 1"></div>
+      <div><label class="flabel">Seats</label><input class="ifield" id="tbl_seats" type="number" min="1" max="20" value="2"></div>
+      <div><label class="flabel">Section</label>
+        <select class="ifield" id="tbl_section">
+          ${sections.map(s=>`<option value="${s}" ${s===defaultSection?'selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <button class="btn btn-gold w-full" onclick="saveTableConfig('')">Add Table</button>`);
+}
+
+function openEditTable(id) {
+  const t = (S.tables_config||[]).find(x=>x.id===id);
+  if (!t) return;
+  const sections = S.table_sections||['Main Hall'];
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Edit Table: ${t.label}</div>
+    <div class="grid-2 mb-14">
+      <div><label class="flabel">Table Label *</label><input class="ifield" id="tbl_label" value="${t.label}"></div>
+      <div><label class="flabel">Seats</label><input class="ifield" id="tbl_seats" type="number" min="1" max="20" value="${t.seats||2}"></div>
+      <div><label class="flabel">Section</label>
+        <select class="ifield" id="tbl_section">
+          ${sections.map(s=>`<option value="${s}" ${s===t.section?'selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <button class="btn btn-gold w-full" onclick="saveTableConfig('${id}')">Save Changes</button>`);
+}
+
+function saveTableConfig(existing_id) {
+  const label = document.getElementById('tbl_label').value.trim();
+  if (!label) { showToast('Label required','warn'); return; }
+  S.tables_config = S.tables_config||[];
+  S.next_table_id = S.next_table_id||1;
+  if (existing_id) {
+    const t = S.tables_config.find(x=>x.id===existing_id);
+    if (t) { t.label=label; t.seats=parseInt(document.getElementById('tbl_seats').value)||2; t.section=document.getElementById('tbl_section').value; }
+  } else {
+    S.tables_config.push({ id:'tbl'+S.next_table_id++, label, seats:parseInt(document.getElementById('tbl_seats').value)||2, section:document.getElementById('tbl_section').value });
+  }
+  saveState();
+  closeModal();
+  showToast('Table saved ✓','ok');
+  renderSettings(document.getElementById('page-settings'));
+}
+
+function deleteTableConfig(id) {
+  if (!confirm('Remove this table?')) return;
+  S.tables_config = (S.tables_config||[]).filter(t=>t.id!==id);
+  saveState();
+  renderSettings(document.getElementById('page-settings'));
+}
+
+function openManageSections() {
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Manage Sections</div>
+    <div id="sec_list">${(S.table_sections||[]).map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr);">
+      <span>${s}</span>
+      <button class="btn btn-danger btn-xs" onclick="removeSectionFromWizard('${s}')">Remove</button>
+    </div>`).join('')}</div>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <input class="ifield" id="new_section_name" placeholder="New section name" style="flex:1;">
+      <button class="btn btn-gold btn-sm" onclick="addSectionFromWizard()">Add</button>
+    </div>
+    <button class="btn btn-outline w-full mt-8" onclick="closeModal();renderSettings(document.getElementById('page-settings'))">Done</button>`);
+}
+
+function addSectionFromWizard() {
+  const name = document.getElementById('new_section_name').value.trim();
+  if (!name) return;
+  S.table_sections = S.table_sections||[];
+  if (!S.table_sections.includes(name)) { S.table_sections.push(name); saveState(); }
+  document.getElementById('new_section_name').value='';
+  document.getElementById('sec_list').innerHTML=(S.table_sections||[]).map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr);">
+    <span>${s}</span>
+    <button class="btn btn-danger btn-xs" onclick="removeSectionFromWizard('${s}')">Remove</button>
+  </div>`).join('');
+}
+
+function removeSectionFromWizard(name) {
+  S.table_sections = (S.table_sections||[]).filter(s=>s!==name);
+  saveState();
+  document.getElementById('sec_list').innerHTML=(S.table_sections||[]).map(s=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr);">
+    <span>${s}</span>
+    <button class="btn btn-danger btn-xs" onclick="removeSectionFromWizard('${s}')">Remove</button>
+  </div>`).join('');
+}
+
+function deleteSection(name) {
+  if (!confirm(`Remove section "${name}"? Tables in this section won't be deleted.`)) return;
+  S.table_sections=(S.table_sections||[]).filter(s=>s!==name);
+  saveState();
+  renderSettings(document.getElementById('page-settings'));
+}
+
+function syncTablesFromConfig() {
+  // Sync tables_config into the POS table map labels that openTableMap() uses
+  // The POS table map uses S.table_labels array; populate it from tables_config
+  S.table_labels = (S.tables_config||[]).map(t=>t.label);
+  saveState();
+  showToast(`${S.table_labels.length} tables synced to POS ✓`,'ok');
+  renderSettings(document.getElementById('page-settings'));
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Z-REPORT HTML BUILDER (for printing)
+// ═══════════════════════════════════════════════════════════════
+function buildZReportHTML(r) {
+  const payRows = Object.entries(r.pay_map||{}).map(([k,v])=>`<tr><td>${k}</td><td style="text-align:right;">${fmt(v)}</td></tr>`).join('');
+  return `<!DOCTYPE html><html><head>
+    <style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:monospace;font-size:11px;width:80mm;padding:8px;}
+    table{width:100%;border-collapse:collapse;}td{padding:2px 0;}hr{border:none;border-top:1px dashed #000;margin:6px 0;}
+    .center{text-align:center;}.bold{font-weight:bold;}.right{text-align:right;}
+    </style></head><body>
+    <div class="center bold" style="font-size:14px;">${S.hotel_name}</div>
+    <div class="center">Z-REPORT — ${r.date}</div>
+    <div class="center">Z# ${r.z_number||'—'}</div><hr>
+    <table><tr><td>Transactions</td><td class="right">${r.tx_count||0}</td></tr>
+    <tr><td>Gross Revenue</td><td class="right bold">${fmt(r.gross||0)}</td></tr>
+    <tr><td>Net Sales</td><td class="right">${fmt(r.net||0)}</td></tr>
+    <tr><td>VAT</td><td class="right">${fmt(r.vat||0)}</td></tr>
+    <tr><td>Discounts</td><td class="right">${fmt(r.discounts||0)}</td></tr>
+    <tr><td>Voids</td><td class="right">${r.void_count||0}</td></tr></table>
+    <hr><div class="bold" style="margin:4px 0;">PAYMENT METHODS</div>
+    <table>${payRows}</table><hr>
+    <div class="center" style="font-size:10px;">Closed by ${r.closed_by||'—'}<br>${r.closed_at?new Date(r.closed_at).toLocaleString():''}</div>
+    </body></html>`;
+}
 
 </script>
 </body>
