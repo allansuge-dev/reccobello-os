@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ReccoBello OS v5.0</title>
+<title>ReccoBello OS v5.1</title>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 /* ══ AFRICAN NDEBELE THEME ══ Extracted from Ndebele geometric beadwork */
@@ -1363,6 +1363,10 @@ function defaultState() {
     cart: [],
     cart_member_id: null,
     cart_table: '',
+    cart_discount: 0,
+    cart_discount_type: 'pct',
+    // Table layout
+    tables: Array.from({length:10},(_,i)=>({id:i+1,label:'Table '+(i+1),seats:4,active:true})),
 
     // Offers
     holiday_surge_pct: 10,
@@ -1459,7 +1463,10 @@ function defaultState() {
     // ── COMPLIANCE / TAX ────────────────────────────────────────
     kra_pin: '',
     etims_enabled: false,
-    paper_size: '80mm'
+    paper_size: '80mm',
+    // ── END OF DAY REPORTS ──────────────────────────────────────
+    eod_reports: [],
+    next_eod_id: 1
   };
 }
 
@@ -2094,11 +2101,25 @@ function renderDashboard(el) {
   el.innerHTML = `
   <div class="page-hdr">
     <div><div class="page-title">Dashboard</div><div class="page-sub">Welcome back, ${S.current_user?.name} · ${fmtDate(todayStr())}${holiday?' · <span style="color:var(--org)">🎉 Holiday Pricing Active</span>':''}</div></div>
-    <button class="btn btn-outline btn-sm" onclick="sendPulseReport()">📡 Send Pulse Report</button>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline btn-sm" onclick="sendPulseReport()">📡 Pulse Report</button>
+      <button class="btn btn-outline btn-sm" onclick="openZReport()" style="border-color:var(--gold);color:var(--gold);">📋 Z-Report</button>
+    </div>
   </div>
   <div class="page-body fade-in">
-    ${bdays>0?`<div class="alert a-info">🎂 ${bdays} member birthday${bdays>1?'s':''} today! Check Alert Centre.</div>`:''}
-    ${low_stock>0?`<div class="alert a-warn">📉 ${low_stock} item${low_stock>1?'s':''} below minimum stock level.</div>`:''}
+    ${bdays>0?`<div class="alert a-info" style="cursor:pointer;" onclick="navTo('members')">🎂 ${bdays} member birthday${bdays>1?'s':''} today — check Members.</div>`:''}
+    ${low_stock>0?`<div class="card" style="border:1px solid var(--org);padding:12px;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="color:var(--org);font-weight:600;font-size:13px;">📉 Low Stock Alert — ${low_stock} item${low_stock>1?'s':''}</span>
+        <button class="btn btn-outline btn-xs" onclick="navTo('inventory')">Restock →</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        ${S.items.filter(i=>i.stock<=i.min_stock).map(i=>`
+          <span style="background:rgba(224,80,16,.15);border:1px solid var(--org);border-radius:6px;padding:3px 10px;font-size:12px;color:var(--wh);">
+            ${i.name} <strong style="color:var(--org);">${i.stock}</strong><span style="color:var(--mut);font-size:10px;"> / min ${i.min_stock}</span>
+          </span>`).join('')}
+      </div>
+    </div>`:''}
 
     <!-- Sales stats -->
     <div class="stats-grid">
@@ -2223,8 +2244,12 @@ function renderPOS(el) {
         </div>
         <div class="cart-items" id="cartItemsList"></div>
         <div class="cart-ftr">
-          <input class="tbl-inp" placeholder="Table number / Room number" value="${S.cart_table}" oninput="S.cart_table=this.value;saveState();">
+          <input class="tbl-inp" placeholder="Table / Room number" value="${S.cart_table}" oninput="S.cart_table=this.value;saveState();">
           <div class="cart-totals" id="cartTotals"></div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center;">
+            <button class="btn btn-outline btn-xs" onclick="openDiscountModal()" style="flex:1;white-space:nowrap;">${S.cart_discount?'Disc: '+(S.cart_discount_type==='pct'?S.cart_discount+'%':fmt(S.cart_discount)):'% Discount'}</button>
+            <button class="btn btn-outline btn-xs" onclick="openTableMap()" style="flex:1;white-space:nowrap;">🪑 Table Map</button>
+          </div>
           <div style="display:flex;gap:8px;">
             <button class="btn btn-outline btn-sm" onclick="clearCart()" style="flex:1;">Clear</button>
             <button class="btn btn-gold" onclick="checkoutCart()" id="checkoutBtn" style="flex:2;" ${S.cart.length===0?'disabled':''}>Checkout →</button>
@@ -2334,17 +2359,22 @@ function renderCart() {
   list.innerHTML = html;
 
   const holiday = isHoliday();
-  const vat_rate = 0.16;
-  const net = Math.round(subtotal / (1+vat_rate));
-  const vat = subtotal - net;
-  const points = S.cart_member_id ? calcPoints(subtotal) : 0;
+  const vat_rate = (S.tax_config&&S.tax_config.vat||16)/100;
+  // Apply discount
+  const disc = S.cart_discount||0;
+  const disc_amt = disc>0 ? (S.cart_discount_type==='pct' ? Math.round(subtotal*disc/100) : Math.min(disc,subtotal)) : 0;
+  const after_disc = subtotal - disc_amt;
+  const net = Math.round(after_disc / (1+vat_rate));
+  const vat = after_disc - net;
+  const points = S.cart_member_id ? calcPoints(after_disc) : 0;
 
   totEl.innerHTML = `
     ${holiday?`<div class="crow hday">Holiday surge +${S.holiday_surge_pct}% applied</div>`:''}
     <div class="crow"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
-    <div class="crow"><span>VAT (16% incl.)</span><span>${fmt(vat)}</span></div>
-    ${points>0?`<div class="crow" style="color:var(--grn);"><span>Points to be earned</span><span>+${points} pts</span></div>`:''}
-    <div class="crow total"><span>TOTAL</span><span>${fmt(subtotal)}</span></div>`;
+    ${disc_amt>0?`<div class="crow" style="color:#18b84a;"><span>Discount (${S.cart_discount_type==='pct'?S.cart_discount+'%':fmt(S.cart_discount)})</span><span>−${fmt(disc_amt)}</span></div>`:''}
+    <div class="crow"><span>VAT (${Math.round(vat_rate*100)}% incl.)</span><span>${fmt(vat)}</span></div>
+    ${points>0?`<div class="crow" style="color:var(--grn);"><span>Points to earn</span><span>+${points} pts</span></div>`:''}
+    <div class="crow total"><span>TOTAL</span><span>${fmt(after_disc)}</span></div>`;
 }
 
 function adjustQty(idx, delta) {
@@ -2363,7 +2393,7 @@ function removeFromCart(idx) {
 }
 
 function clearCart() {
-  S.cart = []; S.cart_member_id = null; S.cart_table='';
+  S.cart = []; S.cart_member_id = null; S.cart_table=''; S.cart_discount=0; S.cart_discount_type='pct';
   saveState();
   renderPOS(document.getElementById('page-pos'));
 }
@@ -2515,13 +2545,51 @@ function _p2_checkoutCart_replaced() {
 function voidTransaction(tx_id) {
   const tx = S.transactions.find(t=>t.id===tx_id);
   if (!tx || tx.voided) return;
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title" style="color:var(--red);">Void Transaction</div>
+    <div style="background:var(--card2);border:1px solid var(--bdr);border-radius:10px;padding:14px;margin:14px 0;">
+      <div style="font-size:13px;margin-bottom:4px;">Receipt: <strong>${tx.receipt_no}</strong></div>
+      <div style="font-size:13px;margin-bottom:4px;">Amount: <strong style="color:var(--gold);">${fmt(tx.total)}</strong></div>
+      <div style="font-size:13px;">Payment: ${tx.payment_method}</div>
+    </div>
+    <label class="flabel">Void Reason <span class="freq">*</span></label>
+    <select class="ifield" id="void_reason_select" style="margin-top:6px;" onchange="document.getElementById('void_reason_other').style.display=this.value==='Other'?'block':'none'">
+      <option value="">— Select reason —</option>
+      <option>Customer cancelled order</option>
+      <option>Wrong items ordered</option>
+      <option>Duplicate transaction</option>
+      <option>Test / Training sale</option>
+      <option>Item out of stock after billing</option>
+      <option>Payment method changed</option>
+      <option>Manager override</option>
+      <option>Other</option>
+    </select>
+    <textarea class="ifield" id="void_reason_other" placeholder="Describe reason..." style="display:none;margin-top:8px;height:70px;resize:none;"></textarea>
+    <div class="alert a-crit" style="font-size:12px;margin-top:12px;">This action is irreversible and will trigger a Telegram alert to management.</div>
+    <div style="display:flex;gap:10px;margin-top:14px;">
+      <button class="btn btn-outline" onclick="closeModal()" style="flex:1;">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmVoid('${tx_id}')" style="flex:2;">Confirm Void</button>
+    </div>
+  `);
+}
+
+function confirmVoid(tx_id) {
+  const tx = S.transactions.find(t=>t.id===tx_id);
+  if (!tx) return;
+  const sel = document.getElementById('void_reason_select');
+  const other = document.getElementById('void_reason_other');
+  const reason = sel.value==='Other' ? (other.value.trim()||'Other') : sel.value;
+  if (!reason) { showToast('Select a void reason','warn'); return; }
   tx.voided = true;
   tx.voided_at = now();
   tx.voided_by = S.current_user.id;
-  log('Transaction voided', `${tx.receipt_no} voided by ${S.current_user.name}`, 'warn');
-  telegramAlert(`⚠️ VOID: Receipt ${tx.receipt_no} voided by ${S.current_user.name}`, 'crit');
+  tx.void_reason = reason;
+  closeModal();
+  log('Transaction voided', `${tx.receipt_no} — Reason: ${reason} — by ${S.current_user.name}`, 'warn');
+  telegramAlert(`⚠️ VOID: ${tx.receipt_no} | ${fmt(tx.total)} | Reason: ${reason} | By: ${S.current_user.name}`, 'crit');
   saveState();
-  showToast('Transaction voided — alert sent', 'warn');
+  showToast('Transaction voided ✓', 'warn');
   navTo('transactions');
 }
 
@@ -4592,6 +4660,9 @@ function processCheckoutWithMethod(payment_method) {
     item.stock=Math.max(0,item.stock-citem.qty);
   });
   const vat_rate=(S.tax_config?.vat||16)/100;
+  const disc=S.cart_discount||0;
+  const disc_amt=disc>0?(S.cart_discount_type==='pct'?Math.round(validated_total*disc/100):Math.min(disc,validated_total)):0;
+  validated_total=validated_total-disc_amt;
   const net=Math.round(validated_total/(1+vat_rate)), vat=validated_total-net;
   const points_earned=S.cart_member_id?calcPoints(validated_total):0;
   const tx_id=S.next_tx_id++;
@@ -4600,7 +4671,7 @@ function processCheckoutWithMethod(payment_method) {
   _pendingCashTendered = 0;
   const tx={id:tx_id,receipt_no,ts:now(),staff_id:S.current_user.id,staff_name:S.current_user.name,
     member_id:S.cart_member_id||null,table:S.cart_table||'',items:tx_items,
-    subtotal:validated_total,net,vat,total:validated_total,points_earned,
+    subtotal:validated_total+disc_amt,discount:disc_amt||undefined,net,vat,total:validated_total,points_earned,
     payment_method,cash_tendered:cash_tendered||undefined,
     is_holiday:isHoliday(),holiday_pct:isHoliday()?S.holiday_surge_pct:0,voided:false,hash:''};
   tx.hash=hashTx(tx);
@@ -4612,7 +4683,7 @@ function processCheckoutWithMethod(payment_method) {
     saveState();
     showToast('📲 Offline: transaction buffered','warn');
     kairosLog(`📲 [OFFLINE] Buffered ${receipt_no} — ${fmt(validated_total)}`,'warn');
-    S.cart=[]; S.cart_member_id=null; S.cart_table=''; saveState();
+    S.cart=[]; S.cart_member_id=null; S.cart_table=''; S.cart_discount=0; S.cart_discount_type='pct'; saveState();
     renderPOS(document.getElementById('page-pos')); return;
   }
 
@@ -4629,7 +4700,7 @@ function processCheckoutWithMethod(payment_method) {
     items:tx_items.filter(i=>!['Beer','Whisky','Cognac'].includes(S.items.find(x=>x.id===i.item_id)?.cat||'')),
     state:'PENDING',claimed_by:null,claimed_at:null,ready_at:null,collected_at:null};
   if(kds_order.items.length>0){ S.kds_orders.unshift(kds_order); if(S.kds_orders.length>200) S.kds_orders=S.kds_orders.slice(0,200); }
-  S.cart=[]; S.cart_member_id=null; S.cart_table=''; saveState();
+  S.cart=[]; S.cart_member_id=null; S.cart_table=''; S.cart_discount=0; S.cart_discount_type='pct'; saveState();
   showReceipt(tx);
   renderPOS(document.getElementById('page-pos'));
 }
@@ -4637,6 +4708,73 @@ function processCheckoutWithMethod(payment_method) {
 // ═══════════════════════════════════════════════════════════════
 //  PAYMENT FLOWS — Mobile Money / Card / QR / Split
 // ═══════════════════════════════════════════════════════════════
+
+function openDiscountModal() {
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Apply Discount</div>
+    <div style="display:flex;gap:8px;margin:14px 0;">
+      <button id="disc_pct_btn" class="btn ${(S.cart_discount_type||'pct')==='pct'?'btn-gold':'btn-outline'}" onclick="document.getElementById('disc_pct_btn').className='btn btn-gold';document.getElementById('disc_fix_btn').className='btn btn-outline';_discType='pct'" style="flex:1;">% Percentage</button>
+      <button id="disc_fix_btn" class="btn ${S.cart_discount_type==='fixed'?'btn-gold':'btn-outline'}" onclick="document.getElementById('disc_fix_btn').className='btn btn-gold';document.getElementById('disc_pct_btn').className='btn btn-outline';_discType='fixed'" style="flex:1;">Fixed Amount</button>
+    </div>
+    <input class="ifield" id="disc_val" type="number" min="0" value="${S.cart_discount||''}" placeholder="Enter discount value" style="font-size:20px;text-align:center;font-family:'IBM Plex Mono',monospace;">
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+      ${[5,10,15,20,25,50].map(v=>`<button onclick="document.getElementById('disc_val').value=${v}" class="btn btn-outline btn-xs">${v}%</button>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button class="btn btn-outline" onclick="S.cart_discount=0;S.cart_discount_type='pct';saveState();closeModal();renderCart();renderPOS(document.getElementById('page-pos'))" style="flex:1;">Remove</button>
+      <button class="btn btn-gold" onclick="applyDiscount()" style="flex:2;">Apply</button>
+    </div>
+  `);
+  window._discType = S.cart_discount_type||'pct';
+}
+function applyDiscount() {
+  const val = parseFloat(document.getElementById('disc_val').value)||0;
+  if (window._discType==='pct' && (val<0||val>100)) { showToast('Percentage must be 0–100','warn'); return; }
+  S.cart_discount = val;
+  S.cart_discount_type = window._discType||'pct';
+  saveState();
+  closeModal();
+  renderCart();
+  renderPOS(document.getElementById('page-pos'));
+  log('Discount applied', `${val}${S.cart_discount_type==='pct'?'%':' fixed'} by ${S.current_user.name}`, 'warn');
+  showToast('Discount applied ✓', 'ok');
+}
+
+function openTableMap() {
+  const occupied = new Set((S.kds_orders||[]).filter(o=>o.state!=='COLLECTED').map(o=>o.table));
+  const tables = S.tables || Array.from({length:10},(_,i)=>({id:i+1,label:'Table '+(i+1),seats:4,active:true}));
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Table Map</div>
+    <div style="font-size:12px;color:var(--mut);margin-bottom:14px;display:flex;gap:14px;">
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:12px;height:12px;border-radius:3px;background:var(--card2);display:inline-block;border:1px solid var(--bdr);"></span>Available</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:12px;height:12px;border-radius:3px;background:rgba(224,80,16,.3);display:inline-block;border:1px solid var(--org);"></span>Occupied</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:12px;height:12px;border-radius:3px;background:rgba(240,184,0,.25);display:inline-block;border:1px solid var(--gold);"></span>Selected</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;">
+      ${tables.filter(t=>t.active).map(t=>{
+        const isOcc = occupied.has(t.label)||occupied.has(String(t.id));
+        const isSel = S.cart_table===t.label||S.cart_table===String(t.id);
+        return `<button onclick="selectTable('${t.label}')" style="padding:14px 8px;border-radius:10px;border:1px solid ${isSel?'var(--gold)':isOcc?'var(--org)':'var(--bdr)'};background:${isSel?'rgba(240,184,0,.2)':isOcc?'rgba(224,80,16,.15)':'var(--card2)'};color:var(--wh);cursor:pointer;font-size:13px;font-weight:600;text-align:center;transition:all .2s;">
+          <div>${t.label}</div>
+          <div style="font-size:10px;color:var(--mut);margin-top:2px;">${t.seats} seats</div>
+          ${isOcc?`<div style="font-size:9px;color:var(--org);margin-top:2px;">BUSY</div>`:''}
+        </button>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline" onclick="selectTable('Walk-in')" style="flex:1;">Walk-in</button>
+      <button class="btn btn-outline" onclick="closeModal()" style="flex:1;">Cancel</button>
+    </div>
+  `);
+}
+function selectTable(label) {
+  S.cart_table = label;
+  saveState();
+  closeModal();
+  renderPOS(document.getElementById('page-pos'));
+}
 
 function openCashFlow(amount) {
   const quick = [amount, Math.ceil(amount/100)*100, Math.ceil(amount/500)*500, Math.ceil(amount/1000)*1000];
@@ -4942,6 +5080,10 @@ function renderCmdResults(q) {
     {icon:'🔄',title:'Run Kairos Check',sub:'Trigger sentinel scan',section:'Actions',action:()=>{runKairosCheck();showToast('Kairos scan complete','ok');}},
     {icon:'💰',title:'Run Settlement',sub:'Process nightly settlement',section:'Actions',action:()=>runNightlySettlement(),admin:true},
     {icon:'📊',title:'Export CSV',sub:'Download all transactions',section:'Actions',action:()=>exportTransactionsCSV()},
+    {icon:'📋',title:'Z-Report / End of Day',sub:'Close today and print Z-Report',section:'Actions',action:()=>openZReport()},
+    {icon:'👤',title:'My Shift Report',sub:'Your sales this session',section:'Actions',action:()=>openShiftReport()},
+    {icon:'%',title:'Apply Discount',sub:'Add discount to current cart',section:'Actions',action:()=>openDiscountModal()},
+    {icon:'🪑',title:'Table Map',sub:'Select table visually',section:'Actions',action:()=>openTableMap()},
     {icon:'🏨',title:'Switch: Hospitality',sub:'Hotel/restaurant mode',section:'Industry',action:()=>switchIndustry('hospitality'),admin:true},
     {icon:'🏭',title:'Switch: Warehouse',sub:'Warehouse/retail mode',section:'Industry',action:()=>switchIndustry('warehouse'),admin:true},
     {icon:'🏥',title:'Switch: Healthcare',sub:'Clinic/pharmacy mode',section:'Industry',action:()=>switchIndustry('healthcare'),admin:true},
@@ -6109,6 +6251,172 @@ function clearOfflineCardQueue() {
   saveState();
   showToast('Offline card queue cleared', 'ok');
   renderReports(document.getElementById('page-reports'));
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Z-REPORT / END OF DAY
+// ═══════════════════════════════════════════════════════════════
+function openZReport() {
+  const today = todayStr();
+  const txs = S.transactions.filter(t=>t.ts.startsWith(today)&&!t.voided);
+  const voids = S.transactions.filter(t=>t.ts.startsWith(today)&&t.voided);
+  const gross = txs.reduce((a,t)=>a+t.total,0);
+  const vat = txs.reduce((a,t)=>a+(t.vat||0),0);
+  const net = txs.reduce((a,t)=>a+(t.net||0),0);
+  const discounts = txs.reduce((a,t)=>a+(t.discount||0),0);
+  const cogs = txs.reduce((a,t)=>{
+    return a+(t.items||[]).reduce((b,i)=>{
+      const item=S.items.find(x=>x.id===i.item_id); return b+(item?(item.cost||0)*i.qty:0);},0);},0);
+  const payMap = {};
+  txs.forEach(t=>{ const m=t.payment_method||'Other'; payMap[m]=(payMap[m]||0)+t.total; });
+  const staffMap = {};
+  txs.forEach(t=>{ const n=t.staff_name||'?'; staffMap[n]=(staffMap[n]||0)+t.total; });
+  const cashExpected = (payMap['Cash']||0);
+  const already_closed = (S.eod_reports||[]).find(r=>r.date===today);
+
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Z-Report — ${fmtDate(today)}</div>
+    ${already_closed?`<div class="alert a-warn" style="font-size:11px;">Day already closed at ${fmtDateTime(already_closed.closed_at)}.</div>`:''}
+    <div style="max-height:60vh;overflow-y:auto;padding-right:4px;">
+      <div class="stats-grid" style="grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+        <div class="stat-card gold"><div class="stat-val" style="font-size:22px;">${fmt(gross)}</div><div class="stat-lbl">Gross Revenue</div></div>
+        <div class="stat-card grn"><div class="stat-val" style="font-size:22px;">${txs.length}</div><div class="stat-lbl">Transactions</div></div>
+        <div class="stat-card blu"><div class="stat-val" style="font-size:22px;">${fmt(net)}</div><div class="stat-lbl">Net Sales</div></div>
+        <div class="stat-card org"><div class="stat-val" style="font-size:22px;">${fmt(vat)}</div><div class="stat-lbl">VAT Collected</div></div>
+      </div>
+      ${discounts>0?`<div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px solid var(--bdr);"><span style="color:var(--mut);">Total Discounts Given</span><span style="color:#18b84a;">−${fmt(discounts)}</span></div>`:''}
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px solid var(--bdr);"><span style="color:var(--mut);">Cost of Goods</span><span>${fmt(cogs)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px solid var(--bdr);"><span style="color:var(--mut);">Gross Profit</span><span style="color:#18b84a;font-weight:600;">${fmt(gross-cogs)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px solid var(--bdr);"><span style="color:var(--org);">Voided Transactions</span><span>${voids.length}</span></div>
+      <div class="card-title mt-12 mb-8" style="font-size:11px;letter-spacing:1px;text-transform:uppercase;">Payment Breakdown</div>
+      ${Object.entries(payMap).map(([m,t])=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--bdr);"><span>${m}</span><span style="font-family:'IBM Plex Mono',monospace;color:var(--gold);">${fmt(t)}</span></div>`).join('')}
+      <div class="card-title mt-12 mb-8" style="font-size:11px;letter-spacing:1px;text-transform:uppercase;">Staff Sales</div>
+      ${Object.entries(staffMap).map(([n,t])=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--bdr);"><span>${n}</span><span style="font-family:'IBM Plex Mono',monospace;">${fmt(t)}</span></div>`).join('')}
+      <div style="background:var(--card2);border:1px solid var(--bdr);border-radius:8px;padding:12px;margin-top:12px;">
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px;">Cash Reconciliation</div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;"><span style="color:var(--mut);">Expected cash in drawer</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--gold);">${fmt(cashExpected)}</span></div>
+        <div style="margin-top:8px;"><label style="font-size:11px;color:var(--mut);">Actual cash counted:</label>
+          <input class="ifield" id="eod_actual_cash" type="number" value="${Math.round(cashExpected)}" style="margin-top:4px;font-family:'IBM Plex Mono',monospace;" oninput="updateEodVariance(${cashExpected})">
+        </div>
+        <div id="eod_variance" style="font-size:13px;margin-top:6px;"></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button class="btn btn-outline" onclick="printZReport()" style="flex:1;">Print</button>
+      <button class="btn btn-gold" onclick="closeEOD()" style="flex:2;" ${already_closed?'disabled':''}>Close Day & Save</button>
+    </div>
+  `);
+  updateEodVariance(cashExpected);
+}
+
+function updateEodVariance(expected) {
+  const actual = parseFloat(document.getElementById('eod_actual_cash')?.value)||0;
+  const diff = actual - expected;
+  const el = document.getElementById('eod_variance');
+  if (!el) return;
+  if (Math.abs(diff)<1) { el.innerHTML='<span style="color:#18b84a;">✓ Balanced</span>'; return; }
+  el.innerHTML = diff>0
+    ? `<span style="color:#18b84a;">Over by ${fmt(diff)}</span>`
+    : `<span style="color:var(--red);">Short by ${fmt(Math.abs(diff))}</span>`;
+}
+
+function closeEOD() {
+  const today = todayStr();
+  const txs = S.transactions.filter(t=>t.ts.startsWith(today)&&!t.voided);
+  const gross = txs.reduce((a,t)=>a+t.total,0);
+  const payMap = {};
+  txs.forEach(t=>{ const m=t.payment_method||'Other'; payMap[m]=(payMap[m]||0)+t.total; });
+  const actual_cash = parseFloat(document.getElementById('eod_actual_cash')?.value)||0;
+  const eod = {
+    id: S.next_eod_id++,
+    date: today,
+    closed_at: now(),
+    closed_by: S.current_user.name,
+    gross, tx_count: txs.length,
+    payment_breakdown: payMap,
+    expected_cash: payMap['Cash']||0,
+    actual_cash,
+    variance: actual_cash - (payMap['Cash']||0)
+  };
+  S.eod_reports = S.eod_reports||[];
+  S.eod_reports.unshift(eod);
+  saveState();
+  closeModal();
+  log('Day closed', `Z-Report #${eod.id} — ${fmt(gross)} — ${txs.length} txns`, 'ok');
+  showToast(`Day closed ✓ — Z-Report #${eod.id} saved`, 'ok');
+  kairosLog(`📋 [EOD] Z-Report #${eod.id} — ${fmt(gross)} — closed by ${S.current_user.name}`, 'ok');
+  if (window.RB) window.RB.notify('Day Closed', `Z-Report: ${fmt(gross)} in ${txs.length} transactions`);
+}
+
+function openShiftReport() {
+  const uid = S.current_user?.id;
+  const name = S.current_user?.name;
+  const today = todayStr();
+  const myTxs = S.transactions.filter(t=>t.staff_id===uid&&t.ts.startsWith(today)&&!t.voided);
+  const gross = myTxs.reduce((a,t)=>a+t.total,0);
+  const payMap = {};
+  myTxs.forEach(t=>{ const m=t.payment_method||'Other'; payMap[m]=(payMap[m]||0)+t.total; });
+  const topItems = {};
+  myTxs.forEach(t=>(t.items||[]).forEach(i=>{ topItems[i.name]=(topItems[i.name]||0)+i.qty; }));
+  const topList = Object.entries(topItems).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">My Shift — ${name}</div>
+    <div style="font-size:12px;color:var(--mut);margin-bottom:14px;">${fmtDate(today)}</div>
+    <div class="stats-grid" style="grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+      <div class="stat-card gold"><div class="stat-val" style="font-size:20px;">${fmt(gross)}</div><div class="stat-lbl">My Sales</div></div>
+      <div class="stat-card blu"><div class="stat-val" style="font-size:20px;">${myTxs.length}</div><div class="stat-lbl">Transactions</div></div>
+    </div>
+    <div class="card-title mb-8" style="font-size:11px;text-transform:uppercase;letter-spacing:1px;">Payment Methods</div>
+    ${Object.entries(payMap).map(([m,t])=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--bdr);"><span>${m}</span><span style="color:var(--gold);font-family:'IBM Plex Mono',monospace;">${fmt(t)}</span></div>`).join('')||'<div style="color:var(--mut);font-size:13px;">No sales yet</div>'}
+    ${topList.length?`<div class="card-title mt-12 mb-8" style="font-size:11px;text-transform:uppercase;letter-spacing:1px;">Top Sellers</div>
+    ${topList.map(([n,q])=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--bdr);"><span>${n}</span><span style="color:var(--mut);">${q} sold</span></div>`).join('')}`:''}
+    <button class="btn btn-outline w-full mt-16" onclick="closeModal()">Close</button>
+  `);
+}
+
+function printZReport() {
+  const today = todayStr();
+  const txs = S.transactions.filter(t=>t.ts.startsWith(today)&&!t.voided);
+  const gross = txs.reduce((a,t)=>a+t.total,0);
+  const vat = txs.reduce((a,t)=>a+(t.vat||0),0);
+  const payMap = {};
+  txs.forEach(t=>{ const m=t.payment_method||'Other'; payMap[m]=(payMap[m]||0)+t.total; });
+  const actual_cash = parseFloat(document.getElementById('eod_actual_cash')?.value)||(payMap['Cash']||0);
+  const html = buildThermalReceiptHTML({
+    receipt_no:'Z-'+today,
+    ts:now(),
+    staff_name:S.current_user.name,
+    items:[],
+    net:txs.reduce((a,t)=>a+(t.net||0),0),
+    vat,
+    total:gross,
+    payment_method:'Z-Report',
+    hash:'Z-REPORT',
+    voided:false,
+    table:'END OF DAY',
+    _extra_html:`
+      <hr class="dash">
+      <div style="font-weight:bold;text-align:center;margin:4px 0;">Z-REPORT — ${today}</div>
+      <hr class="dash">
+      <div class="row"><span>Transactions</span><span>${txs.length}</span></div>
+      ${Object.entries(payMap).map(([m,t])=>`<div class="row"><span>${m}</span><span>${fmt(t)}</span></div>`).join('')}
+      <hr class="dash">
+      <div class="row"><span>Expected Cash</span><span>${fmt(payMap['Cash']||0)}</span></div>
+      <div class="row bold"><span>Actual Cash</span><span>${fmt(actual_cash)}</span></div>
+      <div class="row"><span>Variance</span><span>${fmt(actual_cash-(payMap['Cash']||0))}</span></div>
+    `
+  });
+  if (window.RB) {
+    const p = S._selectedPrinter||'';
+    if (p) window.RB.printers.direct(html,p).then(r=>r.success&&showToast('Z-Report printed','ok'));
+    else window.RB.print.receipt(html);
+  } else {
+    const w=window.open('','_blank','width=320,height=600');
+    w.document.write(html); w.document.close(); w.focus();
+    setTimeout(()=>{w.print();w.close();},500);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
