@@ -588,6 +588,17 @@ tr:hover td{background:var(--card2);}
 /* Guest photo */
 .guest-photo-preview{width:70px;height:70px;border-radius:50%;border:2px solid var(--bdr);object-fit:cover;background:var(--card2);display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--mut);overflow:hidden;}
 .guest-photo-preview img{width:100%;height:100%;object-fit:cover;}
+/* Housekeeping */
+.hk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;}
+.hk-card{background:var(--card);border:1px solid var(--bdr);border-radius:12px;padding:14px;transition:all .2s;cursor:pointer;}
+.hk-card:hover{border-color:var(--gold);transform:translateY(-2px);}
+.hk-badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;}
+.hk-badge.dirty{background:rgba(204,26,26,.2);color:#ff5555;}
+.hk-badge.cleaning{background:rgba(26,78,200,.2);color:#4488ff;}
+.hk-badge.inspecting{background:rgba(240,184,0,.15);color:var(--gold);}
+.hk-badge.clean{background:rgba(24,184,74,.15);color:#22dd60;}
+.hk-badge.out_of_order{background:rgba(136,34,204,.2);color:#bb55ff;}
+.folio-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid rgba(42,42,80,.4);font-size:13px;}
 /* RBAC role badges */
 .role-badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.5px;}
 .role-badge.admin{background:rgba(240,184,0,.25);color:var(--gold);}
@@ -1198,6 +1209,7 @@ tr:hover td{background:var(--card2);}
         <div class="nav-item admin-only" onclick="navTo('settings')" data-page="settings"><span class="icon">⚙️</span>Settings</div>
         <div class="nav-sect">Hospitality</div>
         <div class="nav-item" onclick="navTo('rooms')" data-page="rooms"><span class="icon">🏨</span>Room Management</div>
+        <div class="nav-item" onclick="navTo('housekeeping')" data-page="housekeeping"><span class="icon">🧹</span>Housekeeping</div>
         <div class="nav-sect">Staff Tools</div>
         <div class="nav-item" onclick="navTo('wastage')" data-page="wastage"><span class="icon">🗑️</span>Wastage Log</div>
         <div class="nav-item" onclick="navTo('expenses')" data-page="expenses"><span class="icon">💸</span>Expenses</div>
@@ -1232,6 +1244,7 @@ tr:hover td{background:var(--card2);}
       <div id="page-settlement" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
       <div id="page-wastage" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
       <div id="page-rooms"   style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
+      <div id="page-housekeeping" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
       <div id="page-reports" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
       <div id="page-expenses" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
       <div id="page-suppliers" style="display:none;flex:1;flex-direction:column;overflow:hidden;"></div>
@@ -2057,7 +2070,7 @@ function applyRBACToSidebar() {
 function renderPage(page, el) {
   switch(page) {
     case 'dashboard': renderDashboard(el); break;
-    case 'pos': renderPOS(el); break;
+    case 'pos': posSearchQ=''; renderPOS(el); break;
     case 'members': renderMembers(el); break;
     case 'inventory': renderInventory(el); break;
     case 'transactions': renderTransactions(el); break;
@@ -2072,6 +2085,7 @@ function renderPage(page, el) {
     case 'settlement':  renderSettlement(el); break;
     case 'wastage':     renderWastage(el);    break;
     case 'rooms':       renderRooms(el);      break;
+    case 'housekeeping': renderHousekeeping(el); break;
     case 'reports':     renderReports(el);    break;
     case 'expenses':    renderExpenses(el);   break;
     case 'suppliers':   renderSuppliers(el);  break;
@@ -2209,6 +2223,9 @@ function renderDashboard(el) {
           </div>`).join('')}
       </div>
     </div>
+
+    <!-- Hourly Revenue Chart -->
+    ${buildHourlyChart(today_txs)}
   </div>`;
 }
 
@@ -2232,10 +2249,43 @@ function renderCategorySummary(txs) {
     </div>`).join('');
 }
 
+function buildHourlyChart(txs) {
+  if (!txs.length) return '';
+  const hourMap = {};
+  for (let h=0;h<24;h++) hourMap[h]=0;
+  txs.forEach(t=>{ const h=new Date(t.ts).getHours(); hourMap[h]=(hourMap[h]||0)+t.total; });
+  const maxVal = Math.max(...Object.values(hourMap), 1);
+  const W=600, H=90, pad=4, barW=Math.floor((W-pad*2)/24)-2;
+  const bars = Object.entries(hourMap).map(([h,v])=>{
+    const x = pad + parseInt(h)*(barW+2);
+    const barH = Math.max(2, Math.round((v/maxVal)*(H-20)));
+    const y = H-16-barH;
+    const isNow = parseInt(h)===new Date().getHours();
+    const col = isNow ? '#f8d840' : v>0 ? '#f0b800' : 'rgba(61,42,80,.4)';
+    return `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="2" fill="${col}" opacity="${v>0?'.85':'.4'}">
+      <title>${h}:00 — ${v>0?fmt(v):'no sales'}</title>
+    </rect>
+    ${isNow?`<rect x="${x}" y="${H-14}" width="${barW}" height="2" rx="1" fill="#f8d840"/>`:''}
+    ${parseInt(h)%4===0?`<text x="${x+barW/2}" y="${H-2}" text-anchor="middle" fill="#8a7a9a" font-size="8" font-family="IBM Plex Mono,monospace">${h}</text>`:''}`;
+  }).join('');
+  const peakH = Object.entries(hourMap).sort((a,b)=>b[1]-a[1])[0];
+  return `<div class="card" style="margin-top:18px;">
+    <div class="card-hdr">
+      <div class="card-title">Hourly Revenue — Today</div>
+      <div style="font-size:12px;color:var(--mut);">Peak: ${peakH[1]>0?peakH[0]+':00 · '+fmt(peakH[1]):'no sales yet'}</div>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" style="overflow:visible;">${bars}</svg>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mut);margin-top:4px;font-family:'IBM Plex Mono',monospace;padding:0 ${pad}px;">
+      <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span>
+    </div>
+  </div>`;
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  POINT OF SALE
 // ═══════════════════════════════════════════════════════════════
 let posCat = 'All';
+let posSearchQ = '';
 
 function renderPOS(el) {
   const holiday = isHoliday();
@@ -2246,6 +2296,7 @@ function renderPOS(el) {
   <div class="page-body" style="padding:16px 22px;">
     <div class="pos-wrap">
       <div class="pos-left">
+        <div style="padding:0 0 8px 0;"><input type="text" id="pos-search" class="ifield" placeholder="🔍 Search items… (press / )" style="font-size:13px;padding:8px 12px;" oninput="posSearchQ=this.value;renderPosItems()" autocomplete="off"></div>
         <div class="cat-tabs" id="posCatTabs"></div>
         <div class="items-grid" id="posItemsGrid"></div>
       </div>
@@ -2297,7 +2348,11 @@ function setPOSCat(cat) {
 }
 
 function renderPosItems() {
-  const items = S.items.filter(i=>posCat==='All'||i.cat===posCat);
+  let items = S.items.filter(i=>posCat==='All'||i.cat===posCat);
+  if (posSearchQ) {
+    const q = posSearchQ.toLowerCase();
+    items = items.filter(i=>i.name.toLowerCase().includes(q)||(i.sku||'').toLowerCase().includes(q)||(i.barcode||'').toLowerCase().includes(q)||(i.cat||'').toLowerCase().includes(q));
+  }
   const holiday = isHoliday();
   document.getElementById('posItemsGrid').innerHTML = items.map(item=>{
     const price = resolvePrice(item);
@@ -4868,6 +4923,10 @@ function checkoutCart() {
         <button onclick="selectPaymentMethod2('${m.id}')" style="padding:16px 12px;background:var(--card2);border:1px solid var(--bdr);border-radius:10px;color:var(--wh);cursor:pointer;font-family:'Outfit',sans-serif;font-size:13px;font-weight:500;display:flex;align-items:center;gap:8px;transition:all .2s;width:100%;text-align:left;" onmouseover="this.style.borderColor='var(--gold)';this.style.background='rgba(240,184,0,.06)'" onmouseout="this.style.borderColor='var(--bdr)';this.style.background='var(--card2)'">
           <span style="font-size:18px;">${m.icon}</span><span>${m.label}</span>
         </button>`).join('')}
+      ${(S.bookings||[]).filter(b=>b.status==='checked_in').length>0?`
+        <button onclick="selectPaymentMethod2('RoomCharge')" style="padding:16px 12px;background:rgba(26,78,200,.12);border:1px solid rgba(26,78,200,.4);border-radius:10px;color:#4488ff;cursor:pointer;font-family:'Outfit',sans-serif;font-size:13px;font-weight:500;display:flex;align-items:center;gap:8px;transition:all .2s;width:100%;text-align:left;" onmouseover="this.style.borderColor='#4488ff'" onmouseout="this.style.borderColor='rgba(26,78,200,.4)'">
+          <span style="font-size:18px;">🏨</span><span>Charge to Room</span>
+        </button>`:''}
     </div>`);
 }
 
@@ -4882,12 +4941,78 @@ function selectPaymentMethod2(methodId) {
   if (methodId==='Card') { openCardFlow(total); return; }
   if (methodId==='SnapScan') { openQRCodeFlow(total, methodId); return; }
   if (methodId==='Cash') { openCashFlow(total); return; }
+  if (methodId==='RoomCharge') { openRoomChargeFlow(total); return; }
   // Bank Transfer, EFT — direct
   openPaymentModal(total, methodId, processCheckoutWithMethod);
 }
 
 // ── Backward compat alias ──────────────────────────────────────
 function selectPaymentMethod(method) { selectPaymentMethod2(method); }
+
+function openRoomChargeFlow(total) {
+  const checkedIn = (S.bookings||[]).filter(b=>b.status==='checked_in');
+  if (!checkedIn.length) { showToast('No guests currently checked in','warn'); return; }
+  openModal(`<button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">🏨 Charge to Room — ${fmt(total)}</div>
+    <div style="font-size:12px;color:var(--mut);margin-bottom:14px;">Select the guest room to post this charge to:</div>
+    <div style="display:flex;flex-direction:column;gap:8px;max-height:55vh;overflow-y:auto;">
+      ${checkedIn.map(b=>{
+        const room = (S.rooms||[]).find(r=>r.id===b.room_id);
+        return `<button onclick="processRoomCharge(${b.id})" style="padding:14px 16px;background:var(--card2);border:1px solid var(--bdr);border-radius:10px;color:var(--wh);cursor:pointer;font-family:'Outfit',sans-serif;display:flex;align-items:center;gap:12px;transition:all .2s;width:100%;text-align:left;" onmouseover="this.style.borderColor='#4488ff'" onmouseout="this.style.borderColor='var(--bdr)'">
+          <span style="font-size:24px;">🛏️</span>
+          <div style="flex:1;">
+            <div style="font-weight:600;">${b.guest_name}</div>
+            <div style="font-size:11px;color:var(--mut);">Room ${room?room.number:'?'} · ${b.booking_ref} · Check-out: ${b.check_out}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:12px;color:var(--mut);">${(b.room_charges||[]).length} charge${(b.room_charges||[]).length!==1?'s':''} on folio</div>
+            <div style="font-size:12px;color:#4488ff;">${fmt((b.room_charges||[]).reduce((a,c)=>a+c.amount,0))} posted</div>
+          </div>
+        </button>`;
+      }).join('')}
+    </div>`);
+}
+
+function processRoomCharge(bookingId) {
+  closeModal();
+  const b = (S.bookings||[]).find(x=>x.id===bookingId);
+  if (!b) return;
+  if (!b.room_charges) b.room_charges = [];
+
+  // Build cart snapshot for the charge
+  let total = 0, tx_items = [];
+  S.cart.forEach(citem=>{
+    const item = S.items.find(i=>i.id===citem.item_id); if(!item) return;
+    const unit_price = resolvePrice(item);
+    const item_total = unit_price * citem.qty;
+    total += item_total;
+    tx_items.push({item_id:item.id,name:item.name,qty:citem.qty,unit_price,total_price:item_total});
+    item.stock = Math.max(0, item.stock - citem.qty);
+  });
+
+  const disc = S.cart_discount||0;
+  const disc_amt = disc>0?(S.cart_discount_type==='pct'?Math.round(total*disc/100):Math.min(disc,total)):0;
+  total = total - disc_amt;
+
+  const charge_id = 'FC-'+Date.now().toString(36).toUpperCase().slice(-6);
+  b.room_charges.push({
+    id: charge_id,
+    amount: total,
+    items: tx_items,
+    ts: now(),
+    staff_name: S.current_user?.name||'',
+    table: S.cart_table||'',
+    posted_by: S.current_user?.name||''
+  });
+
+  log('Room Folio', `${charge_id} posted to ${b.booking_ref} — ${fmt(total)}`, 'ok');
+  telegramAlert(`🏨 Room Charge: ${b.guest_name} (${b.booking_ref}) ← ${fmt(total)} posted`, 'ok');
+
+  S.cart = []; S.cart_member_id = null; S.cart_table = ''; S.cart_discount = 0; S.cart_discount_type = 'pct';
+  saveState();
+  renderPOS(document.getElementById('page-pos'));
+  showToast(`${fmt(total)} posted to ${b.guest_name}'s folio ✓`, 'ok');
+}
 
 function processCheckoutWithMethod(payment_method) {
   let validated_total=0, tx_items=[];
@@ -5292,7 +5417,19 @@ function processSplitPayment(totalAmount) {
 //  COMMAND PALETTE (Cmd+K)
 // ═══════════════════════════════════════════════════════════════
 let cpSelectedIdx=0, cpCurrentResults=[];
-document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();openCmdPalette();} if(e.key==='Escape')closeCmdPalette(); });
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();openCmdPalette();}
+  if(e.key==='Escape') closeCmdPalette();
+  // POS keyboard shortcut: / focuses the item search when on POS page and not already in an input
+  if(e.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) {
+    const page=document.querySelector('[data-page].active')?.dataset?.page;
+    if(page==='pos') {
+      e.preventDefault();
+      const srch=document.getElementById('pos-search');
+      if(srch){srch.focus();srch.select();}
+    }
+  }
+});
 
 function openCmdPalette() { if(!S.current_user)return; document.getElementById('cmd-palette').classList.add('open'); setTimeout(()=>document.getElementById('cpInput')?.focus(),50); renderCmdResults(''); }
 function closeCmdPalette() { document.getElementById('cmd-palette').classList.remove('open'); cpSelectedIdx=0; }
@@ -6214,10 +6351,53 @@ function checkOutGuest(bookingId) {
   const b = S.bookings.find(x=>x.id===bookingId);
   if (!b) return;
   const room = S.rooms.find(r=>r.id===b.room_id);
-  if (room) room.status='available';
-  b.status='checked_out'; b.checked_out_at=now();
-  saveState(); log('Rooms','Guest '+b.guest_name+' checked out','ok');
-  showToast(b.guest_name+' checked out ✓','ok');
+  const folioCharges = b.room_charges||[];
+  const folioTotal = folioCharges.reduce((a,c)=>a+c.amount,0);
+  const roomTotal = b.total_amount||0;
+  const grandTotal = roomTotal + folioTotal;
+
+  openModal(`<button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Check-out — ${b.guest_name}</div>
+    <div style="background:var(--card2);border-radius:10px;padding:14px;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px;">
+        <span>🛏️ Room ${room?room.number:'?'} — ${b.nights} night${b.nights!==1?'s':''}</span>
+        <span class="text-gold">${fmt(roomTotal)}</span>
+      </div>
+      ${folioCharges.length>0?`<div style="border-top:1px solid var(--bdr);padding-top:8px;margin-bottom:8px;font-size:12px;color:var(--mut);">F&amp;B / Room Charges</div>
+      ${folioCharges.map(c=>`<div class="folio-row"><span>${c.id} — ${c.items.map(i=>i.qty+'× '+i.name).join(', ')}</span><span>${fmt(c.amount)}</span></div>`).join('')}`:''}
+      <div style="border-top:2px solid var(--gold);padding-top:10px;margin-top:10px;display:flex;justify-content:space-between;font-weight:700;font-size:16px;">
+        <span>GRAND TOTAL</span><span class="text-gold">${fmt(grandTotal)}</span>
+      </div>
+      <div style="font-size:11px;color:var(--mut);margin-top:6px;">Accommodation: ${fmt(roomTotal)} · Folio charges: ${fmt(folioTotal)}</div>
+    </div>
+    <div style="display:flex;gap:10px;">
+      ${['Cash','M-Pesa','Card'].map(m=>`<button class="btn btn-outline" style="flex:1;" onclick="finalizeCheckout(${bookingId},'${m}')">${m}</button>`).join('')}
+    </div>
+    <button class="btn btn-ghost w-full mt-8" style="color:var(--mut);" onclick="finalizeCheckout(${bookingId},'Deferred')">Mark as Deferred (Pay Later)</button>`);
+}
+
+function finalizeCheckout(bookingId, payMethod) {
+  closeModal();
+  const b = S.bookings.find(x=>x.id===bookingId);
+  if (!b) return;
+  const room = S.rooms.find(r=>r.id===b.room_id);
+  if (room) {
+    room.status = 'available';
+    // Create housekeeping task for this room
+    createHKTask(room.id, 'Guest checked out');
+    if (!S.hk_tasks) S.hk_tasks = [];
+    const existingTask = S.hk_tasks.find(t=>t.room_id===room.id);
+    if (existingTask) { existingTask.status='dirty'; existingTask.updated_at=now(); }
+  }
+  b.status = 'checked_out';
+  b.checked_out_at = now();
+  b.checkout_payment_method = payMethod;
+  b.folio_total = (b.room_charges||[]).reduce((a,c)=>a+c.amount,0);
+  b.grand_total = b.total_amount + b.folio_total;
+  saveState();
+  log('Rooms', `${b.guest_name} checked out via ${payMethod} — Grand total ${fmt(b.grand_total)}`, 'ok');
+  telegramAlert(`🏁 Check-out: ${b.guest_name} · Room ${room?room.number:'?'} · Total ${fmt(b.grand_total)} (${payMethod})`, 'ok');
+  showToast(`${b.guest_name} checked out ✓ — ${fmt(b.grand_total)} (${payMethod})`, 'ok');
   renderRooms(document.getElementById('page-rooms'));
 }
 
@@ -6303,6 +6483,183 @@ function viewBookingDetail(bookingId) {
       ${b.notes?`<div style="padding:10px;background:var(--card2);border-radius:6px;font-size:12px;color:var(--mut);">📝 ${b.notes}</div>`:''}
     </div>`;
   document.body.appendChild(modal);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  HOUSEKEEPING
+// ═══════════════════════════════════════════════════════════════
+let hkFilter = 'all';
+
+function ensureHKTasks() {
+  if (!S.hk_tasks) S.hk_tasks = [];
+  if (!S.next_hk_id) S.next_hk_id = 1;
+}
+
+function createHKTask(roomId, reason) {
+  ensureHKTasks();
+  const existing = S.hk_tasks.find(t=>t.room_id===roomId && t.status!=='clean');
+  if (existing) return;
+  S.hk_tasks.push({
+    id: S.next_hk_id++,
+    room_id: roomId,
+    status: 'dirty',
+    assigned_to: null,
+    notes: reason || '',
+    created_at: now(),
+    updated_at: now()
+  });
+  saveState();
+}
+
+function renderHousekeeping(el) {
+  ensureHKTasks();
+  const rooms = S.rooms || [];
+  rooms.forEach(r => {
+    const task = S.hk_tasks.find(t=>t.room_id===r.id);
+    if (!task) S.hk_tasks.push({id:S.next_hk_id++,room_id:r.id,status:r.status==='available'?'clean':'dirty',assigned_to:null,notes:'',created_at:now(),updated_at:now()});
+  });
+  saveState();
+
+  const tasks = S.hk_tasks.filter(t=>rooms.find(r=>r.id===t.room_id));
+  const counts = {dirty:0,cleaning:0,inspecting:0,clean:0,out_of_order:0};
+  tasks.forEach(t=>{ if(counts[t.status]!==undefined) counts[t.status]++; });
+  const filtered = hkFilter==='all' ? tasks : tasks.filter(t=>t.status===hkFilter);
+  const staffList = (S.staff||[]).filter(s=>s.active&&['admin','manager','receptionist','housekeeper'].some(r=>r===s.role)||(s.role||'').includes('keep'));
+
+  el.innerHTML = `
+  <div class="page-hdr">
+    <div><div class="page-title">Housekeeping</div><div class="page-sub">${tasks.length} rooms · ${counts.dirty} dirty · ${counts.cleaning} being cleaned · ${counts.clean} clean</div></div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline btn-sm" onclick="hkAssignAll()">👤 Auto-Assign</button>
+      <button class="btn btn-gold btn-sm" onclick="hkMarkAllClean()">✅ Mark All Clean</button>
+    </div>
+  </div>
+  <div class="page-body fade-in">
+    <!-- Stats strip -->
+    <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:18px;">
+      <div class="stat-card red" style="cursor:pointer;" onclick="hkFilter='dirty';renderHousekeeping(document.getElementById('page-housekeeping'))"><div class="stat-val" style="color:#ff5555;">${counts.dirty}</div><div class="stat-lbl">Dirty</div></div>
+      <div class="stat-card blu" style="cursor:pointer;" onclick="hkFilter='cleaning';renderHousekeeping(document.getElementById('page-housekeeping'))"><div class="stat-val" style="color:#4488ff;">${counts.cleaning}</div><div class="stat-lbl">Cleaning</div></div>
+      <div class="stat-card gold" style="cursor:pointer;" onclick="hkFilter='inspecting';renderHousekeeping(document.getElementById('page-housekeeping'))"><div class="stat-val" style="color:var(--gold);">${counts.inspecting}</div><div class="stat-lbl">Inspecting</div></div>
+      <div class="stat-card grn" style="cursor:pointer;" onclick="hkFilter='clean';renderHousekeeping(document.getElementById('page-housekeeping'))"><div class="stat-val" style="color:#22dd60;">${counts.clean}</div><div class="stat-lbl">Clean</div></div>
+      <div class="stat-card" style="cursor:pointer;" onclick="hkFilter='all';renderHousekeeping(document.getElementById('page-housekeeping'))"><div class="stat-val" style="color:var(--mut);">${tasks.length}</div><div class="stat-lbl">All Rooms</div></div>
+    </div>
+    <!-- Filter tabs -->
+    <div class="tab-nav" style="margin-bottom:16px;">
+      ${['all','dirty','cleaning','inspecting','clean','out_of_order'].map(f=>`<button class="tbtn ${hkFilter===f?'active':''}" onclick="hkFilter='${f}';renderHousekeeping(document.getElementById('page-housekeeping'))">${f.charAt(0).toUpperCase()+f.slice(1).replace('_',' ')} ${f!=='all'?'('+counts[f]+')':''}</button>`).join('')}
+    </div>
+    ${filtered.length===0?`<div style="text-align:center;padding:60px;color:var(--mut);">No rooms in this category.</div>`:`
+    <div class="hk-grid">
+      ${filtered.map(t=>{
+        const room = rooms.find(r=>r.id===t.room_id);
+        if (!room) return '';
+        const assignee = t.assigned_to ? (S.staff||[]).find(s=>s.id===t.assigned_to) : null;
+        const icons = {dirty:'🔴',cleaning:'🔵',inspecting:'🟡',clean:'🟢',out_of_order:'🟣'};
+        return `<div class="hk-card">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+            <div>
+              <div style="font-size:16px;font-weight:700;">Room ${room.number}</div>
+              <div style="font-size:11px;color:var(--mut);">${room.type} · Floor ${room.floor||1}</div>
+            </div>
+            <span class="hk-badge ${t.status}">${icons[t.status]||''} ${t.status.replace('_',' ')}</span>
+          </div>
+          ${assignee?`<div style="font-size:11px;color:#4488ff;margin-bottom:8px;">👤 ${assignee.name}</div>`:'<div style="font-size:11px;color:var(--mut);margin-bottom:8px;">Unassigned</div>'}
+          ${t.notes?`<div style="font-size:11px;color:var(--mut);margin-bottom:8px;font-style:italic;">${t.notes}</div>`:''}
+          <div style="display:flex;flex-direction:column;gap:5px;margin-top:auto;">
+            ${t.status==='dirty'?`<button class="btn btn-outline btn-xs" onclick="hkSetStatus(${t.id},'cleaning')">🧹 Start Cleaning</button>`:''}
+            ${t.status==='cleaning'?`<button class="btn btn-outline btn-xs" onclick="hkSetStatus(${t.id},'inspecting')">🔍 Send for Inspection</button>`:''}
+            ${t.status==='inspecting'?`<button class="btn btn-grn btn-xs" onclick="hkSetStatus(${t.id},'clean')">✅ Mark Clean</button>`:''}
+            ${t.status==='clean'?`<button class="btn btn-outline btn-xs" onclick="hkSetStatus(${t.id},'dirty')" style="color:var(--mut);">Mark Dirty</button>`:''}
+            <button class="btn btn-outline btn-xs" onclick="hkOpenAssign(${t.id})">👤 Assign Staff</button>
+            <button class="btn btn-xs" onclick="hkAddNote(${t.id})" style="background:rgba(42,42,80,.4);color:var(--mut);">📝 Note</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`}
+  </div>`;
+}
+
+function hkSetStatus(taskId, newStatus) {
+  ensureHKTasks();
+  const t = S.hk_tasks.find(x=>x.id===taskId);
+  if (!t) return;
+  t.status = newStatus;
+  t.updated_at = now();
+  if (newStatus==='clean') {
+    const room = (S.rooms||[]).find(r=>r.id===t.room_id);
+    if (room && room.status!=='occupied') room.status='available';
+  }
+  saveState();
+  log('Housekeeping', `Room ${(S.rooms||[]).find(r=>r.id===t.room_id)?.number} → ${newStatus}`, 'ok');
+  telegramAlert(`🧹 HK: Room ${(S.rooms||[]).find(r=>r.id===t.room_id)?.number} → ${newStatus.toUpperCase()}`, 'ok');
+  renderHousekeeping(document.getElementById('page-housekeeping'));
+}
+
+function hkOpenAssign(taskId) {
+  ensureHKTasks();
+  const t = S.hk_tasks.find(x=>x.id===taskId);
+  const room = (S.rooms||[]).find(r=>r.id===t?.room_id);
+  const staff = (S.staff||[]).filter(s=>s.active);
+  openModal(`<button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Assign Room ${room?.number}</div>
+    <div style="display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow-y:auto;margin-top:8px;">
+      ${staff.map(s=>`<button class="btn btn-outline" onclick="hkDoAssign(${taskId},'${s.id}');closeModal()" style="text-align:left;justify-content:flex-start;gap:10px;">
+        <span style="font-size:18px;">👤</span><span>${s.name}</span><span class="role-badge ${s.role}" style="margin-left:auto;">${s.role}</span>
+      </button>`).join('')}
+    </div>
+    <button class="btn btn-ghost w-full mt-8" onclick="hkDoAssign(${taskId},null);closeModal()">Clear Assignment</button>`);
+}
+
+function hkDoAssign(taskId, staffId) {
+  ensureHKTasks();
+  const t = S.hk_tasks.find(x=>x.id===taskId);
+  if (!t) return;
+  t.assigned_to = staffId;
+  t.updated_at = now();
+  if (staffId && t.status==='dirty') { t.status='cleaning'; }
+  saveState();
+  renderHousekeeping(document.getElementById('page-housekeeping'));
+  const s = staffId ? (S.staff||[]).find(x=>x.id===staffId) : null;
+  showToast(s ? `Assigned to ${s.name} ✓` : 'Assignment cleared', 'ok');
+}
+
+function hkAddNote(taskId) {
+  ensureHKTasks();
+  const t = S.hk_tasks.find(x=>x.id===taskId);
+  const room = (S.rooms||[]).find(r=>r.id===t?.room_id);
+  openModal(`<button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Note — Room ${room?.number}</div>
+    <textarea class="ifield" id="hk_note" rows="4" style="margin-top:10px;resize:vertical;">${t?.notes||''}</textarea>
+    <button class="btn btn-gold w-full mt-10" onclick="hkSaveNote(${taskId})">Save Note</button>`);
+}
+
+function hkSaveNote(taskId) {
+  ensureHKTasks();
+  const t = S.hk_tasks.find(x=>x.id===taskId);
+  if (t) { t.notes = document.getElementById('hk_note').value.trim(); t.updated_at = now(); saveState(); }
+  closeModal();
+  renderHousekeeping(document.getElementById('page-housekeeping'));
+}
+
+function hkAssignAll() {
+  ensureHKTasks();
+  const staff = (S.staff||[]).filter(s=>s.active&&s.role!=='admin');
+  if (!staff.length) { showToast('No active staff to assign','warn'); return; }
+  const dirtyTasks = S.hk_tasks.filter(t=>t.status==='dirty'&&!t.assigned_to);
+  dirtyTasks.forEach((t,i)=>{ t.assigned_to=staff[i%staff.length].id; t.status='cleaning'; t.updated_at=now(); });
+  saveState();
+  showToast(`${dirtyTasks.length} tasks auto-assigned ✓`,'ok');
+  renderHousekeeping(document.getElementById('page-housekeeping'));
+}
+
+function hkMarkAllClean() {
+  ensureHKTasks();
+  const doneTasks = S.hk_tasks.filter(t=>['dirty','cleaning','inspecting'].includes(t.status));
+  if (!doneTasks.length) { showToast('All rooms are already clean','ok'); return; }
+  if (!confirm(`Mark all ${doneTasks.length} rooms as clean?`)) return;
+  doneTasks.forEach(t=>{ t.status='clean'; t.updated_at=now(); const room=(S.rooms||[]).find(r=>r.id===t.room_id); if(room&&room.status!=='occupied') room.status='available'; });
+  saveState();
+  showToast(`${doneTasks.length} rooms marked clean ✓`,'ok');
+  renderHousekeeping(document.getElementById('page-housekeeping'));
 }
 
 // ═══════════════════════════════════════════════════════════════
