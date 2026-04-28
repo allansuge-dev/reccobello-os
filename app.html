@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ReccoBello OS v5.1</title>
+<title>ReccoBello OS v5.2</title>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 /* ══ AFRICAN NDEBELE THEME ══ Extracted from Ndebele geometric beadwork */
@@ -1369,6 +1369,7 @@ function defaultState() {
     cart_table: '',
     cart_discount: 0,
     cart_discount_type: 'pct',
+    cart_note: '',
     // Table layout
     tables: Array.from({length:10},(_,i)=>({id:i+1,label:'Table '+(i+1),seats:4,active:true})),
 
@@ -2246,6 +2247,9 @@ function renderPOS(el) {
   <div class="page-body" style="padding:16px 22px;">
     <div class="pos-wrap">
       <div class="pos-left">
+        <div style="padding:0 0 8px 0;">
+          <div class="sbox" style="width:100%;"><input id="posSearch" placeholder="Search menu..." oninput="filterPosItems(this.value)" autocomplete="off"></div>
+        </div>
         <div class="cat-tabs" id="posCatTabs"></div>
         <div class="items-grid" id="posItemsGrid"></div>
       </div>
@@ -2266,6 +2270,7 @@ function renderPOS(el) {
         <div class="cart-ftr">
           <input class="tbl-inp" placeholder="Table / Room number" value="${S.cart_table}" oninput="S.cart_table=this.value;saveState();">
           <div class="cart-totals" id="cartTotals"></div>
+          <textarea class="ifield" id="cartNoteField" placeholder="Order notes / special instructions..." rows="2" style="font-size:12px;resize:none;margin-bottom:6px;" oninput="S.cart_note=this.value;saveState();">${S.cart_note||''}</textarea>
           <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center;">
             <button class="btn btn-outline btn-xs" onclick="openDiscountModal()" style="flex:1;white-space:nowrap;">${S.cart_discount?'Disc: '+(S.cart_discount_type==='pct'?S.cart_discount+'%':fmt(S.cart_discount)):'% Discount'}</button>
             <button class="btn btn-outline btn-xs" onclick="openTableMap()" style="flex:1;white-space:nowrap;">🪑 Table Map</button>
@@ -2274,6 +2279,7 @@ function renderPOS(el) {
             <button class="btn btn-outline btn-sm" onclick="clearCart()" style="flex:1;">Clear</button>
             <button class="btn btn-gold" onclick="checkoutCart()" id="checkoutBtn" style="flex:2;" ${S.cart.length===0?'disabled':''}>Checkout →</button>
           </div>
+          <button class="btn btn-ghost btn-xs w-full mt-4" onclick="openCustomerDisplay()" style="color:var(--mut);">📺 Customer Display (F9)</button>
         </div>
       </div>
     </div>
@@ -2297,17 +2303,26 @@ function setPOSCat(cat) {
 }
 
 function renderPosItems() {
-  const items = S.items.filter(i=>posCat==='All'||i.cat===posCat);
+  const q = (document.getElementById('posSearch')?.value||'').toLowerCase().trim();
+  let items = S.items.filter(i=>posCat==='All'||i.cat===posCat);
+  if (q) items = items.filter(i=>i.name.toLowerCase().includes(q)||(i.sku||'').toLowerCase().includes(q));
   const holiday = isHoliday();
-  document.getElementById('posItemsGrid').innerHTML = items.map(item=>{
+  document.getElementById('posItemsGrid').innerHTML = items.length ? items.map(item=>{
     const price = resolvePrice(item);
-    return `<div class="icard ${item.available?'':'unavail'}" onclick="addToCart(${item.id})">
+    const lowStock = item.stock>0 && item.stock<=item.min_stock;
+    return `<div class="icard ${item.available&&item.stock>0?'':'unavail'}" onclick="${item.available&&item.stock>0?`addToCart(${item.id})`:''}">
       ${holiday?`<div class="surge-tag">+${S.holiday_surge_pct}%</div>`:''}
+      ${lowStock?`<div style="position:absolute;top:4px;right:4px;background:var(--org);color:#fff;font-size:8px;padding:1px 5px;border-radius:3px;">LOW</div>`:''}
+      ${item.stock===0?`<div style="position:absolute;inset:0;background:rgba(0,0,0,.5);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--mut);">OUT</div>`:''}
       <div class="icard-name">${item.name}</div>
       <div class="icard-price">${fmt(price)}</div>
       <div class="icard-cat">${item.cat}</div>
     </div>`;
-  }).join('');
+  }).join('') : `<div style="grid-column:1/-1;text-align:center;padding:30px;color:var(--mut);">No items match "${q}"</div>`;
+}
+
+function filterPosItems(q) {
+  renderPosItems();
 }
 
 function addToCart(item_id) {
@@ -2362,10 +2377,12 @@ function renderCart() {
     subtotal += cart_running;
 
     html += `<div class="citem">
-      <div class="citem-info">
+      <div class="citem-info" style="flex:1;min-width:0;">
         <div class="citem-name">${item.name}</div>
         <div class="citem-price">${fmt(cart_running)} · @${fmt(resolvePrice(item))} each</div>
         ${freeNote?`<div class="citem-free">${freeNote}</div>`:''}
+        ${citem.note?`<div style="font-size:11px;color:var(--gold);margin-top:2px;font-style:italic;">📝 ${citem.note}</div>`:''}
+        <button onclick="openCartItemNote(${idx})" style="background:none;border:none;color:var(--mut);font-size:10px;cursor:pointer;padding:0;margin-top:2px;">${citem.note?'Edit note':'+ note'}</button>
       </div>
       <div class="qty-ctrl">
         <button class="qbtn" onclick="adjustQty(${idx},-1)">−</button>
@@ -2412,8 +2429,26 @@ function removeFromCart(idx) {
   document.getElementById('checkoutBtn').disabled = S.cart.length===0;
 }
 
+function openCartItemNote(idx) {
+  const citem = S.cart[idx];
+  if (!citem) return;
+  const item = S.items.find(i=>i.id===citem.item_id);
+  const presets = ['No ice','Extra spicy','No onions','Gluten-free','Well done','Medium rare','No chilli','Extra sauce','No sugar','Vegan'];
+  openModal(`
+    <button class="mcls" onclick="closeModal()">✕</button>
+    <div class="modal-title">Note: ${item?.name||'Item'}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+      ${presets.map(p=>`<button class="btn btn-outline btn-xs" onclick="document.getElementById('ciNote').value=(document.getElementById('ciNote').value?document.getElementById('ciNote').value+', ':''+'${p}')">${p}</button>`).join('')}
+    </div>
+    <input class="ifield" id="ciNote" value="${citem.note||''}" placeholder="Custom instruction for kitchen / bar...">
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button class="btn btn-outline" onclick="S.cart[${idx}].note='';saveState();renderCart();closeModal();" style="flex:1;">Clear</button>
+      <button class="btn btn-gold" onclick="S.cart[${idx}].note=document.getElementById('ciNote').value.trim();saveState();renderCart();closeModal();" style="flex:2;">Save Note</button>
+    </div>`);
+}
+
 function clearCart() {
-  S.cart = []; S.cart_member_id = null; S.cart_table=''; S.cart_discount=0; S.cart_discount_type='pct';
+  S.cart = []; S.cart_member_id = null; S.cart_table=''; S.cart_discount=0; S.cart_discount_type='pct'; S.cart_note='';
   saveState();
   renderPOS(document.getElementById('page-pos'));
 }
@@ -2632,6 +2667,7 @@ function buildReceipt(tx) {
 
   let items_html = tx.items.map(i=>{
     let html = `<div class="rrow"><span>${i.qty}× ${i.name}</span><span>${fmt(i.total_price)}</span></div>`;
+    if (i.note) html += `<div class="rrow" style="font-size:11px;color:#888;padding-left:16px;">📝 ${i.note}</div>`;
     if (i.free_qty>0) html += `<div class="rrow free"><span>  └ ${i.free_qty}× FREE (Loyalty Reward)</span><span>0.00</span></div>`;
     return html;
   }).join('');
@@ -2667,6 +2703,7 @@ function buildReceipt(tx) {
     <div class="rrow"><span>Date</span><span>${fmtDateTime(tx.ts)}</span></div>
     ${tx.table?`<div class="rrow"><span>Table / Room</span><span>${tx.table}</span></div>`:''}
     <div class="rrow"><span>Served by</span><span>${tx.staff_name}</span></div>
+    ${tx.note?`<div class="rrow" style="font-style:italic;color:#888;font-size:11px;"><span>Note</span><span style="text-align:right;max-width:160px;">${tx.note}</span></div>`:''}
     <hr class="rdiv">
     ${items_html}
     ${tx.is_holiday?`<div class="rrow surge">+ Holiday rate applied (+${tx.holiday_pct}%)</div>`:''}
@@ -2688,6 +2725,7 @@ function buildThermalReceiptHTML(tx) {
   const bday_month = m && m.dob && m.dob.slice(5,7) === todayStr().slice(5,7);
   const items_html = (tx.items||[]).map(i=>{
     let h = `<div class="row"><span>${i.qty}x ${i.name}</span><span>${fmt(i.total_price)}</span></div>`;
+    if(i.note) h += `<div style="font-size:9px;color:#555;padding-left:12px;margin-bottom:2px;">↳ ${i.note}</div>`;
     if(i.free_qty>0) h += `<div class="row free"><span>  +${i.free_qty}x FREE (loyalty)</span><span>${S.currency||'KES'} 0</span></div>`;
     return h;
   }).join('');
@@ -2734,6 +2772,7 @@ ${S.kra_pin?`<div class="bsub">KRA PIN: ${S.kra_pin}</div>`:''}
 ${tx.table?`<div class="row"><span>Table / Room</span><span>${tx.table}</span></div>`:''}
 <div class="row"><span>Served by</span><span>${tx.staff_name}</span></div>
 <div class="row"><span>Payment</span><span>${tx.payment_method}</span></div>
+${tx.note?`<div style="font-style:italic;font-size:10px;color:#555;margin:2px 0;">Note: ${tx.note}</div>`:''}
 <hr class="dash">
 ${items_html}
 <hr class="dash">
@@ -4265,7 +4304,8 @@ function kdsCard(o) {
   return `<div class="kds-card ${o.state.toLowerCase()}">
     <div class="kds-rx">${o.receipt_no}</div>
     <div class="kds-table">Table: ${o.table}</div>
-    ${o.items.map(i=>`<div class="kds-item"><span>${i.qty}× ${i.name}</span>${i.free_qty>0?'<span style="color:var(--grn);">FREE</span>':''}</div>`).join('')}
+    ${o.items.map(i=>`<div class="kds-item"><span>${i.qty}× ${i.name}</span>${i.free_qty>0?'<span style="color:var(--grn);">FREE</span>':''}</div>${i.note?`<div style="font-size:10px;color:var(--gold);padding-left:10px;margin-bottom:2px;">📝 ${i.note}</div>`:''}`).join('')}
+    ${o.note?`<div style="background:rgba(240,184,0,.1);border:1px solid rgba(240,184,0,.3);border-radius:4px;padding:4px 8px;font-size:11px;color:var(--gold);margin:4px 0;">⚠️ ${o.note}</div>`:''}
     <div class="kds-timer ${mins_since_placed<2?'fast':'slow'}" data-ts="${new Date(o.ts).getTime()}">${mins_since_placed}m ago</div>
     ${chef_name?`<div class="kds-chef">Chef: ${chef_name}</div>`:''}
     ${btn}
@@ -4900,7 +4940,7 @@ function processCheckoutWithMethod(payment_method) {
       else { item_total+=unit_price; }
     }
     validated_total+=item_total;
-    tx_items.push({item_id:item.id,name:item.name,qty:citem.qty,unit_price,free_qty,total_price:item_total,item_id:item.id});
+    tx_items.push({item_id:item.id,name:item.name,qty:citem.qty,unit_price,free_qty,total_price:item_total,note:citem.note||''});
     item.stock=Math.max(0,item.stock-citem.qty);
   });
   const vat_rate=(S.tax_config?.vat||16)/100;
@@ -4915,6 +4955,7 @@ function processCheckoutWithMethod(payment_method) {
   _pendingCashTendered = 0;
   const tx={id:tx_id,receipt_no,ts:now(),staff_id:S.current_user.id,staff_name:S.current_user.name,
     member_id:S.cart_member_id||null,table:S.cart_table||'',items:tx_items,
+    note:S.cart_note||'',
     subtotal:validated_total+disc_amt,discount:disc_amt||undefined,net,vat,total:validated_total,points_earned,
     payment_method,cash_tendered:cash_tendered||undefined,
     is_holiday:isHoliday(),holiday_pct:isHoliday()?S.holiday_surge_pct:0,voided:false,hash:''};
@@ -4927,7 +4968,7 @@ function processCheckoutWithMethod(payment_method) {
     saveState();
     showToast('📲 Offline: transaction buffered','warn');
     kairosLog(`📲 [OFFLINE] Buffered ${receipt_no} — ${fmt(validated_total)}`,'warn');
-    S.cart=[]; S.cart_member_id=null; S.cart_table=''; S.cart_discount=0; S.cart_discount_type='pct'; saveState();
+    S.cart=[]; S.cart_member_id=null; S.cart_table=''; S.cart_discount=0; S.cart_discount_type='pct'; S.cart_note=''; saveState();
     renderPOS(document.getElementById('page-pos')); return;
   }
 
@@ -4942,9 +4983,10 @@ function processCheckoutWithMethod(payment_method) {
 
   const kds_order={id:uid(),receipt_no,ts:now(),table:S.cart_table||'Walk-in',staff_id:S.current_user.id,staff_name:S.current_user.name,
     items:tx_items.filter(i=>!['Beer','Whisky','Cognac'].includes(S.items.find(x=>x.id===i.item_id)?.cat||'')),
+    note:S.cart_note||'',
     state:'PENDING',claimed_by:null,claimed_at:null,ready_at:null,collected_at:null};
   if(kds_order.items.length>0){ S.kds_orders.unshift(kds_order); if(S.kds_orders.length>200) S.kds_orders=S.kds_orders.slice(0,200); }
-  S.cart=[]; S.cart_member_id=null; S.cart_table=''; S.cart_discount=0; S.cart_discount_type='pct'; saveState();
+  S.cart=[]; S.cart_member_id=null; S.cart_table=''; S.cart_discount=0; S.cart_discount_type='pct'; S.cart_note=''; saveState();
   showReceipt(tx);
   renderPOS(document.getElementById('page-pos'));
 }
@@ -5292,7 +5334,11 @@ function processSplitPayment(totalAmount) {
 //  COMMAND PALETTE (Cmd+K)
 // ═══════════════════════════════════════════════════════════════
 let cpSelectedIdx=0, cpCurrentResults=[];
-document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();openCmdPalette();} if(e.key==='Escape')closeCmdPalette(); });
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();openCmdPalette();}
+  if(e.key==='Escape')closeCmdPalette();
+  if(e.key==='F9'){e.preventDefault();openCustomerDisplay();}
+});
 
 function openCmdPalette() { if(!S.current_user)return; document.getElementById('cmd-palette').classList.add('open'); setTimeout(()=>document.getElementById('cpInput')?.focus(),50); renderCmdResults(''); }
 function closeCmdPalette() { document.getElementById('cmd-palette').classList.remove('open'); cpSelectedIdx=0; }
@@ -6860,6 +6906,52 @@ function startWatchdog() {
     if(Date.now()-watchdogPing>600000) kairosLog('⏱️ [WATCHDOG] App idle 10+ min — still responsive','info');
     if(S.transactions.length>10000) kairosLog('⚠️ [WATCHDOG] 10k+ transactions — consider archiving','warn');
   },300000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CUSTOMER DISPLAY (F9) — second-screen cart total
+// ═══════════════════════════════════════════════════════════════
+let _cdWin = null;
+function openCustomerDisplay() {
+  let subtotal = 0;
+  const vat_rate = (S.tax_config?.vat||16)/100;
+  S.cart.forEach(citem=>{
+    const item = S.items.find(i=>i.id===citem.item_id);
+    if (item) subtotal += resolvePrice(item)*citem.qty;
+  });
+  const disc = S.cart_discount||0;
+  const disc_amt = disc>0 ? (S.cart_discount_type==='pct' ? Math.round(subtotal*disc/100) : Math.min(disc,subtotal)) : 0;
+  const total = subtotal - disc_amt;
+  const itemLines = S.cart.map(c=>{ const i=S.items.find(x=>x.id===c.item_id); return i?`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.07);"><span>${c.qty}× ${i.name}</span><span>${fmt(resolvePrice(i)*c.qty)}</span></div>`:''; }).join('');
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <style>*{margin:0;padding:0;box-sizing:border-box;}body{background:#0e0c10;color:#f5efe0;font-family:'Outfit',sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:40px;}
+  .biz{font-size:28px;font-weight:700;color:#f0b800;letter-spacing:2px;margin-bottom:4px;}
+  .sub{font-size:12px;color:#8a7a9a;margin-bottom:40px;letter-spacing:2px;}
+  .items{width:100%;max-width:400px;font-size:15px;margin-bottom:20px;}
+  .total-box{background:#201830;border:2px solid #f0b800;border-radius:16px;padding:24px 40px;text-align:center;width:100%;max-width:400px;}
+  .total-lbl{font-size:13px;color:#8a7a9a;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;}
+  .total-amt{font-size:56px;font-weight:700;color:#f0b800;font-family:'IBM Plex Mono',monospace;letter-spacing:2px;}
+  .disc{font-size:14px;color:#18b84a;margin-top:6px;}
+  .empty{font-size:20px;color:#8a7a9a;margin-top:40px;}
+  </style></head><body>
+  <div class="biz">${S.hotel_name}</div>
+  <div class="sub">${S.hotel_sub}</div>
+  ${S.cart.length===0?`<div class="empty">Awaiting order...</div>`:`
+  <div class="items">${itemLines}</div>
+  <div class="total-box">
+    <div class="total-lbl">Total Amount</div>
+    <div class="total-amt">${fmt(total)}</div>
+    ${disc_amt>0?`<div class="disc">Discount applied: −${fmt(disc_amt)}</div>`:''}
+  </div>`}
+  <script>setInterval(()=>window.location.reload(),4000);<\/script>
+  </body></html>`;
+
+  if (_cdWin && !_cdWin.closed) {
+    _cdWin.document.open(); _cdWin.document.write(html); _cdWin.document.close();
+  } else {
+    _cdWin = window.open('','CustomerDisplay','width=800,height=500,toolbar=0,menubar=0,location=0');
+    if (_cdWin) { _cdWin.document.write(html); _cdWin.document.close(); }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
